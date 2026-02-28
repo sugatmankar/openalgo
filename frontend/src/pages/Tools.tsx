@@ -34,6 +34,12 @@ const tools = [
     color: 'bg-teal-500',
   },
   {
+    title: 'Combine Premium',
+    description: 'Combined premium chart for multi-leg option strategies with flexible BUY/SELL legs',
+    href: '/combine-premium',
+    color: 'bg-lime-500',
+  },
+  {
     title: 'Vol Surface',
     description: '3D Implied Volatility surface across strikes and expiries using live option chain data',
     href: '/volsurface',
