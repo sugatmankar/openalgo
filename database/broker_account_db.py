@@ -359,6 +359,16 @@ def _mask_secret(value, show_chars=4):
     return value[:show_chars] + "*" * (len(value) - show_chars)
 
 
+def _utc_isoformat(dt):
+    """Convert a naive datetime (assumed UTC from SQLite) to timezone-aware ISO string."""
+    if dt is None:
+        return None
+    from datetime import timezone as tz
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=tz.utc)
+    return dt.isoformat()
+
+
 def _account_to_dict(account, decrypt=False):
     """Convert a BrokerAccount to a dict. If decrypt=False, secrets are masked."""
     api_key_plain = decrypt_token(account.broker_api_key) if account.broker_api_key else ""
@@ -386,13 +396,11 @@ def _account_to_dict(account, decrypt=False):
         "year_of_birth": account.year_of_birth or "",
         "connection_status": account.connection_status or "disconnected",
         "error_message": account.error_message or "",
-        "last_connected_at": (
-            account.last_connected_at.isoformat() if account.last_connected_at else None
-        ),
+        "last_connected_at": _utc_isoformat(account.last_connected_at),
         "is_active": account.is_active,
         "is_authenticated": account.is_authenticated,
-        "created_at": account.created_at.isoformat() if account.created_at else None,
-        "updated_at": account.updated_at.isoformat() if account.updated_at else None,
+        "created_at": _utc_isoformat(account.created_at),
+        "updated_at": _utc_isoformat(account.updated_at),
     }
 
     if decrypt:
