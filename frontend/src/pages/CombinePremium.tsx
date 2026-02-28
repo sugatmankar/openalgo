@@ -227,11 +227,16 @@ export default function CombinePremium() {
         })
         if (resp.status === 'success' && resp.data?.strikes?.length) {
           const newStrikes = resp.data.strikes
+          const strikeSet = new Set(newStrikes)
           setStrikes(newStrikes)
-          // Auto-select ATM (middle strike) for legs that have no strike set
+          // Auto-select ATM for legs with no strike or a strike not in the new list
           const atmStrike = newStrikes[Math.floor(newStrikes.length / 2)]
           setLegs((prev) =>
-            prev.map((l) => (l.strike === null ? { ...l, strike: atmStrike } : l))
+            prev.map((l) =>
+              l.strike === null || !strikeSet.has(l.strike)
+                ? { ...l, strike: atmStrike }
+                : l
+            )
           )
         } else {
           setStrikes([])
