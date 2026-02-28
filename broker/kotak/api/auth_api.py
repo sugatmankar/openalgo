@@ -15,10 +15,9 @@ def authenticate_broker(mobile_number, totp, mpin):
     Authenticate with Kotak using TOTP and MPIN flow.
     Legacy interface for brlogin.py (single-account mode).
 
-    In single-account mode:
-    - BROKER_API_KEY = consumer_key (access token for Authorization header)
-    - BROKER_API_SECRET = consumer_secret (not used for auth)
-    - UCC comes from the form or is not needed if consumer_key encodes it
+    In single-account mode (matches upstream convention):
+    - BROKER_API_KEY = UCC (Unique Client Code)
+    - BROKER_API_SECRET = consumer_key / access token (Authorization header)
 
     Args:
         mobile_number: Mobile number with +91 prefix
@@ -30,8 +29,9 @@ def authenticate_broker(mobile_number, totp, mpin):
     """
     from utils.config import get_broker_api_key, get_broker_api_secret
 
-    consumer_key = get_broker_api_key()
-    return _authenticate_kotak(mobile_number, totp, mpin, consumer_key=consumer_key)
+    ucc = get_broker_api_key()
+    consumer_key = get_broker_api_secret()
+    return _authenticate_kotak(mobile_number, totp, mpin, consumer_key=consumer_key, ucc=ucc)
 
 
 def authenticate_broker_totp(mobile_number, mpin, totp_code, consumer_key=None, ucc=None):

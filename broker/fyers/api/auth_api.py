@@ -159,6 +159,8 @@ def authenticate_broker_totp(
 
     if not broker_api_key or not broker_api_secret:
         return None, "Missing BROKER_API_KEY or BROKER_API_SECRET"
+    if not redirect_url:
+        return None, "Missing REDIRECT_URL — required for Fyers auto-TOTP authentication"
 
     client = get_httpx_client()
 
@@ -170,7 +172,7 @@ def authenticate_broker_totp(
             timeout=30.0,
         )
         res1_data = res1.json()
-        logger.debug(f"Fyers send_login_otp response: {res1_data}")
+        logger.debug(f"Fyers send_login_otp response status: {res1_data.get('s')}")
 
         if "request_key" not in res1_data:
             return None, f"Fyers login OTP failed: {res1_data.get('message', str(res1_data))}"
@@ -182,7 +184,7 @@ def authenticate_broker_totp(
             timeout=30.0,
         )
         res2_data = res2.json()
-        logger.debug(f"Fyers verify_otp response: {res2_data}")
+        logger.debug(f"Fyers verify_otp response status: {res2_data.get('s')}")
 
         if "request_key" not in res2_data:
             return None, f"Fyers TOTP verification failed: {res2_data.get('message', str(res2_data))}"

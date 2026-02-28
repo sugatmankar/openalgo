@@ -113,7 +113,8 @@ def get_tradebook_with_auth(
         trade_data = broker_funcs["get_trade_book"](auth_token)
 
         # Handle empty response (e.g., rate limit, parse failure)
-        if not trade_data or (isinstance(trade_data, dict) and not trade_data):
+        # Note: an empty list [] is valid (no trades); only None is suspicious
+        if trade_data is None:
             return (
                 False,
                 {

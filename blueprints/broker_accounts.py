@@ -550,12 +550,19 @@ def _set_account_env(account):
 
     os.environ["BROKER_API_KEY"] = api_key
     os.environ["BROKER_API_SECRET"] = account.get("broker_api_secret") or ""
-    if account.get("broker_api_key_market"):
-        os.environ["BROKER_API_KEY_MARKET"] = account["broker_api_key_market"]
-    if account.get("broker_api_secret_market"):
-        os.environ["BROKER_API_SECRET_MARKET"] = account["broker_api_secret_market"]
-    if account.get("redirect_url"):
-        os.environ["REDIRECT_URL"] = account["redirect_url"]
+
+    # Always overwrite optional env vars so stale values from a previous
+    # account are cleared when the new account doesn't have them.
+    for env_key, acct_key in (
+        ("BROKER_API_KEY_MARKET", "broker_api_key_market"),
+        ("BROKER_API_SECRET_MARKET", "broker_api_secret_market"),
+        ("REDIRECT_URL", "redirect_url"),
+    ):
+        value = account.get(acct_key)
+        if value:
+            os.environ[env_key] = value
+        else:
+            os.environ.pop(env_key, None)
 
 
 # ---------------------------------------------------------------------------

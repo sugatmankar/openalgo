@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { io, type Socket } from 'socket.io-client'
 
 /**
@@ -59,6 +59,10 @@ export function useOrderEventRefresh(
     enabled = true,
   } = options
 
+  // Stabilize the events array so inline literals don't cause reconnects
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const stableEvents = useMemo(() => events, [JSON.stringify(events)])
+
   const socketRef = useRef<Socket | null>(null)
   const refreshFnRef = useRef(refreshFn)
 
@@ -89,18 +93,18 @@ export function useOrderEventRefresh(
     }
 
     // Register listeners for all specified events
-    events.forEach((event) => {
+    stableEvents.forEach((event) => {
       socket.on(event, handleEvent)
     })
 
     // Cleanup on unmount
     return () => {
-      events.forEach((event) => {
+      stableEvents.forEach((event) => {
         socket.off(event, handleEvent)
       })
       socket.disconnect()
     }
-  }, [events, delay, enabled])
+  }, [stableEvents, delay, enabled])
 }
 
 /**

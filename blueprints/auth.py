@@ -155,19 +155,18 @@ def login():
     return redirect("/login")
 
 
-@auth_bp.route("/broker", methods=["GET", "POST"])
+@auth_bp.route("/broker", methods=["GET"])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def broker_login():
     if session.get("logged_in"):
         return redirect("/dashboard")
-    if request.method == "GET":
-        if "user" not in session:
-            return redirect("/login")
+    if "user" not in session:
+        return redirect("/login")
 
-        # User is authenticated but no logged_in flag — redirect to dashboard
-        # Broker connection is now optional with multi-account system
-        return redirect("/dashboard")
+    # User is authenticated but no logged_in flag — redirect to dashboard
+    # Broker connection is now optional with multi-account system
+    return redirect("/dashboard")
 
 
 @auth_bp.route("/reset-password", methods=["GET", "POST"])

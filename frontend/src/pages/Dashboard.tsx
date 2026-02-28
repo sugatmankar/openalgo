@@ -100,9 +100,11 @@ export default function Dashboard() {
         setError(null)
       } else {
         setError(data.message || 'Failed to fetch margin data')
+        setNoBrokerConnected(false)
       }
     } catch (err) {
       setError('Failed to fetch margin data')
+      setNoBrokerConnected(false)
     } finally {
       setIsLoading(false)
     }
