@@ -1,5 +1,5 @@
 """
-Combine Premium Service
+Combined Premium Chart Service
 Computes combined premium time series for N user-defined option legs.
 
 Each leg has a strike, option_type (CE/PE), and action (BUY/SELL).

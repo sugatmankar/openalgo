@@ -34,7 +34,7 @@ const tools = [
     color: 'bg-teal-500',
   },
   {
-    title: 'Combine Premium',
+    title: 'Combined Premium Chart',
     description: 'Combined premium chart for multi-leg option strategies with flexible BUY/SELL legs',
     href: '/combine-premium',
     color: 'bg-lime-500',

@@ -438,7 +438,7 @@ export default function CombinePremium() {
       {/* Header + Info */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h1 className="text-2xl font-bold">Combine Premium</h1>
+          <h1 className="text-2xl font-bold">Combined Premium Chart</h1>
           <p className="text-muted-foreground text-sm mt-0.5">
             Combined premium chart for custom multi-leg option strategies
           </p>

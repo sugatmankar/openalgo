@@ -1,5 +1,5 @@
 """
-Combine Premium Blueprint
+Combined Premium Chart Blueprint
 Serves combined premium chart data for user-defined option legs.
 """
 
