@@ -121,6 +121,10 @@ export class MarketDataManager {
   private userDisconnected: boolean = false
   private connectAbortController: AbortController | null = null
 
+  // Heartbeat/keepalive properties for proxy/tunnel environments (e.g., Cloudflare Tunnel)
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null
+  private heartbeatRate: number = 30000 // Send ping every 30 seconds
+
   // REST API fallback properties
   private fallbackMode: boolean = false
   private fallbackPollingInterval: ReturnType<typeof setInterval> | null = null
@@ -484,6 +488,9 @@ export class MarketDataManager {
       this.reconnectTimeout = null
     }
 
+    // Stop heartbeat
+    this.stopHeartbeat()
+
     if (this.socket) {
       this.socket.close(1000, 'User disconnect')
       this.socket = null
@@ -511,6 +518,9 @@ export class MarketDataManager {
       clearTimeout(this.reconnectTimeout)
       this.reconnectTimeout = null
     }
+
+    // Stop heartbeat during pause
+    this.stopHeartbeat()
 
     if (this.socket) {
       this.socket.close(1000, 'Paused')
@@ -545,6 +555,8 @@ export class MarketDataManager {
             this.consecutiveFailures = 0 // Reset failure count on successful auth
             // Disable fallback mode now that WebSocket is working
             this.disableFallbackMode()
+            // Start heartbeat to keep connection alive through proxies/tunnels
+            this.startHeartbeat()
             // Resubscribe to all active subscriptions
             this.resubscribeAll()
           } else {
@@ -664,6 +676,42 @@ export class MarketDataManager {
   private notifyStateListeners(): void {
     const state = this.getState()
     this.stateListeners.forEach((listener) => listener(state))
+  }
+
+  // ============================================================
+  // Heartbeat / Keepalive Methods
+  // ============================================================
+
+  /**
+   * Start sending periodic ping messages to keep the WebSocket alive.
+   * Critical for connections through proxies/tunnels (e.g., Cloudflare Tunnel)
+   * which may drop idle WebSocket connections after ~100 seconds.
+   */
+  private startHeartbeat(): void {
+    this.stopHeartbeat() // Clear any existing heartbeat
+
+    this.heartbeatInterval = setInterval(() => {
+      if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+        try {
+          this.socket.send(JSON.stringify({
+            action: 'ping',
+            timestamp: Date.now(),
+          }))
+        } catch {
+          // If send fails, the socket error/close handlers will manage reconnection
+        }
+      }
+    }, this.heartbeatRate)
+  }
+
+  /**
+   * Stop the heartbeat interval
+   */
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval)
+      this.heartbeatInterval = null
+    }
   }
 
   // ============================================================

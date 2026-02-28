@@ -108,6 +108,16 @@ export function useLivePrice<T extends PriceableItem>(
     [items]
   )
 
+  // Stable symbol key for dependency tracking (avoids re-creating callbacks on every items change)
+  const symbolsKey = useMemo(
+    () => items.map((item) => `${item.exchange}:${item.symbol}`).sort().join(','),
+    [items]
+  )
+
+  // Keep a ref to items for use in callbacks without triggering re-creation
+  const itemsRef = useRef(items)
+  itemsRef.current = items
+
   // WebSocket market data - connect when enabled, with visibility awareness
   const { data: marketData, isConnected: wsConnected, isPaused: wsPaused, isFallbackMode } = useMarketData({
     symbols,
@@ -120,12 +130,16 @@ export function useLivePrice<T extends PriceableItem>(
 
   /**
    * Fetch MultiQuotes data from API
+   * Uses itemsRef to avoid re-creating this callback when items array reference changes
+   * (which happens every poll cycle). The symbolsKey dependency ensures it updates
+   * when the actual set of symbols changes.
    */
   const fetchMultiQuotes = useCallback(async () => {
-    if (!apiKey || items.length === 0 || !useMultiQuotesFallback) return
+    const currentItems = itemsRef.current
+    if (!apiKey || currentItems.length === 0 || !useMultiQuotesFallback) return
 
     try {
-      const symbolsList = items.map((item) => ({
+      const symbolsList = currentItems.map((item) => ({
         symbol: item.symbol,
         exchange: item.exchange,
       }))
@@ -145,7 +159,8 @@ export function useLivePrice<T extends PriceableItem>(
     } catch {
       // Silently fail - MultiQuotes is a fallback mechanism
     }
-  }, [apiKey, items, useMultiQuotesFallback])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiKey, symbolsKey, useMultiQuotesFallback])
 
   // Fetch MultiQuotes on mount and when items change
   // Visibility-aware: pause polling when tab is hidden

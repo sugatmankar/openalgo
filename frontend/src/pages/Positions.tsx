@@ -51,6 +51,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useLivePrice } from '@/hooks/useLivePrice'
+import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { cn, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
@@ -268,6 +269,13 @@ export default function Positions() {
       return () => clearTimeout(timeout)
     }
   }, [wasHidden, isVisible, timeSinceHidden, fetchPositions])
+
+  // Listen for Socket.IO order events to refresh positions immediately
+  // This ensures positions update instantly when orders are placed/filled/closed
+  useOrderEventRefresh(fetchPositions, {
+    events: ['order_event', 'analyzer_update', 'close_position_event'],
+    delay: 500,
+  })
 
   // Listen for mode changes (live/analyze) and refresh data
   useEffect(() => {
