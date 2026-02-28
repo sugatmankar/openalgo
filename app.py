@@ -24,6 +24,9 @@ from blueprints.analyzer import analyzer_bp  # Import the analyzer blueprint
 from blueprints.apikey import api_key_bp
 from blueprints.auth import auth_bp
 from blueprints.brlogin import brlogin_bp
+from blueprints.broker_accounts import (
+    broker_accounts_bp,  # Import the broker accounts blueprint
+)
 from blueprints.broker_credentials import (
     broker_credentials_bp,  # Import the broker credentials blueprint
 )
@@ -75,6 +78,7 @@ from database.action_center_db import init_db as ensure_action_center_tables_exi
 from database.analyzer_db import init_db as ensure_analyzer_tables_exists
 from database.apilog_db import init_db as ensure_api_log_tables_exists
 from database.auth_db import init_db as ensure_auth_tables_exists
+from database.broker_account_db import init_db as ensure_broker_accounts_tables_exists
 from database.chartink_db import init_db as ensure_chartink_tables_exists
 from database.flow_db import init_db as ensure_flow_tables_exists
 from database.historify_db import init_database as ensure_historify_tables_exists
@@ -251,6 +255,7 @@ def create_app():
     app.register_blueprint(ivsmile_bp)  # Register IV Smile blueprint
     app.register_blueprint(oiprofile_bp)  # Register OI Profile blueprint
     app.register_blueprint(flow_bp)  # Register Flow blueprint
+    app.register_blueprint(broker_accounts_bp)  # Register Broker accounts blueprint
     app.register_blueprint(broker_credentials_bp)  # Register Broker credentials blueprint
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
 
@@ -507,6 +512,7 @@ def setup_environment(app):
             ("Qty Freeze DB", ensure_qty_freeze_tables_exists),
             ("Historify DB", ensure_historify_tables_exists),
             ("Flow DB", ensure_flow_tables_exists),
+            ("Broker Accounts DB", ensure_broker_accounts_tables_exists),
         ]
 
         db_init_start = time.time()

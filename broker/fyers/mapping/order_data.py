@@ -47,11 +47,13 @@ def map_order_data(order_data):
         exchange = get_exchange(exchange_code, segment_code)
         symbol = order.get("symbol")
 
+        # Always set exchange to the string form (not the integer code)
+        order["exchange"] = exchange
+
         if symbol:
             oa_symbol = get_oa_symbol(brsymbol=symbol, exchange=exchange)
             if oa_symbol:
                 order["symbol"] = oa_symbol
-                order["exchange"] = exchange
             else:
                 logger.warning(
                     f"Could not map Fyers brsymbol '{symbol}' for exchange '{exchange}'. Keeping original."
@@ -181,11 +183,13 @@ def map_trade_data(trade_data):
         exchange = get_exchange(exchange_code, segment_code)
         symbol = trade.get("symbol")
 
+        # Always set exchange to the string form (not the integer code)
+        trade["exchange"] = exchange
+
         if symbol:
             oa_symbol = get_oa_symbol(brsymbol=symbol, exchange=exchange)
             if oa_symbol:
                 trade["symbol"] = oa_symbol
-                trade["exchange"] = exchange
             else:
                 logger.warning(
                     f"Could not map Fyers brsymbol '{symbol}' for exchange '{exchange}'. Keeping original."
@@ -254,11 +258,13 @@ def map_position_data(position_data):
         exchange = get_exchange(exchange_code, segment_code)
         symbol = position.get("symbol")
 
+        # Always set exchange to the string form (not the integer code)
+        position["exchange"] = exchange
+
         if symbol:
             oa_symbol = get_oa_symbol(brsymbol=symbol, exchange=exchange)
             if oa_symbol:
                 position["symbol"] = oa_symbol
-                position["exchange"] = exchange
             else:
                 logger.warning(
                     f"Could not map Fyers brsymbol '{symbol}' for exchange '{exchange}'. Keeping original."
@@ -336,11 +342,13 @@ def map_portfolio_data(portfolio_data):
         exchange = get_exchange(exchange_code, segment_code)
         symbol = portfolio.get("symbol")
 
+        # Always set exchange to the string form (not the integer code)
+        portfolio["exchange"] = exchange
+
         if symbol:
             oa_symbol = get_oa_symbol(brsymbol=symbol, exchange=exchange)
             if oa_symbol:
                 portfolio["symbol"] = oa_symbol
-                portfolio["exchange"] = exchange
             else:
                 logger.warning(
                     f"Could not map Fyers brsymbol '{symbol}' for exchange '{exchange}'. Keeping original."

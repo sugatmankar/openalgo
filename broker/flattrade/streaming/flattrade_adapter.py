@@ -350,7 +350,14 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if ":::" in api_key:
             self.actid = api_key.split(":::")[0]
         else:
-            self.actid = user_id
+            # Fallback: get broker user_id from Auth DB (set during TOTP auth)
+            from database.auth_db import get_user_id
+            broker_uid = get_user_id(user_id)
+            if broker_uid:
+                self.actid = broker_uid
+                self.logger.info(f"Got Flattrade user_id from Auth DB: {broker_uid}")
+            else:
+                self.actid = user_id
 
         # Get auth token from database
         self.susertoken = get_auth_token(user_id)

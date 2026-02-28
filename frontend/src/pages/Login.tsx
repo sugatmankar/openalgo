@@ -42,17 +42,16 @@ export default function Login() {
         if (sessionResponse.ok) {
           const sessionData = await sessionResponse.json()
 
-          if (sessionData.status === 'success' && sessionData.logged_in && sessionData.broker) {
-            // Already fully logged in with broker, go to dashboard
+          if (sessionData.status === 'success' && sessionData.logged_in) {
+            // Already logged in, go to dashboard
             navigate('/dashboard', { replace: true })
             return
           } else if (
             sessionData.status === 'success' &&
-            sessionData.authenticated &&
-            !sessionData.logged_in
+            sessionData.authenticated
           ) {
-            // Logged in but no broker, go to broker selection
-            navigate('/broker', { replace: true })
+            // Authenticated but not fully logged in, go to dashboard
+            navigate('/dashboard', { replace: true })
             return
           }
         }
@@ -120,11 +119,11 @@ export default function Login() {
           navigate(data.redirect)
         }
       } else {
-        // Set login state (broker will be set after broker selection)
+        // Set login state (broker connection is optional with multi-account system)
         setLogin(username, '')
         showToast.success('Login successful', 'system')
-        // Use redirect from response if provided, otherwise go to broker
-        navigate(data.redirect || '/broker')
+        // Go to dashboard; broker can be connected later via Broker Accounts
+        navigate(data.redirect || '/dashboard')
       }
     } catch (err) {
       setError('Login failed. Please try again.')

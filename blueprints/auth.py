@@ -104,12 +104,7 @@ def login():
             ), 400
 
         # Check if already logged in
-        if "user" in session:
-            return jsonify(
-                {"status": "success", "message": "Already logged in", "redirect": "/broker"}
-            ), 200
-
-        if session.get("logged_in"):
+        if "user" in session and session.get("logged_in"):
             return jsonify(
                 {"status": "success", "message": "Already logged in", "redirect": "/dashboard"}
             ), 200
@@ -119,9 +114,12 @@ def login():
 
         if authenticate_user(username, password):
             session["user"] = username  # Set the username in the session
+            session["logged_in"] = True  # Mark as logged in immediately
+            from utils.session import set_session_login_time
+            set_session_login_time()  # Set session expiry tracking
             logger.info(f"Login success for user: {username}")
-            # Redirect to broker login without marking as fully logged in
-            return jsonify({"status": "success"}), 200
+            # Go directly to dashboard; broker connection is optional (multi-account system)
+            return jsonify({"status": "success", "redirect": "/dashboard"}), 200
         else:
             return jsonify({"status": "error", "message": "Invalid credentials"}), 401
 
@@ -129,10 +127,10 @@ def login():
     if find_user_by_username() is None:
         return redirect("/setup")
 
-    if "user" in session:
-        return redirect("/broker")
-
     if session.get("logged_in"):
+        return redirect("/dashboard")
+
+    if "user" in session:
         return redirect("/dashboard")
 
     return redirect("/login")
@@ -148,8 +146,9 @@ def broker_login():
         if "user" not in session:
             return redirect("/login")
 
-        # Redirect to React broker selection page
-        return redirect("/broker")
+        # User is authenticated but no logged_in flag — redirect to dashboard
+        # Broker connection is now optional with multi-account system
+        return redirect("/dashboard")
 
 
 @auth_bp.route("/reset-password", methods=["GET", "POST"])
@@ -539,6 +538,8 @@ def get_session_status():
             }
         )
 
+    # User is authenticated (logged in) but may not have a broker connected yet
+    # With multi-account system, broker connection is optional
     return jsonify(
         {
             "status": "success",

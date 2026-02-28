@@ -21,6 +21,7 @@ const NotFound = lazy(() => import('@/pages/NotFound'))
 // Broker auth
 const BrokerSelect = lazy(() => import('@/pages/BrokerSelect'))
 const BrokerTOTP = lazy(() => import('@/pages/BrokerTOTP'))
+const BrokerAccounts = lazy(() => import('@/pages/BrokerAccounts'))
 
 // Main pages
 const Dashboard = lazy(() => import('@/pages/Dashboard'))
@@ -210,6 +211,7 @@ function App() {
                 <Route path="/profile" element={<Profile />} />
                 <Route path="/master-contract" element={<MasterContract />} />
                 <Route path="/action-center" element={<ActionCenter />} />
+                <Route path="/broker-accounts" element={<BrokerAccounts />} />
               </Route>
 
               {/* Full-width protected routes */}

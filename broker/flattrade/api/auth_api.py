@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 
@@ -8,6 +9,8 @@ from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+FLATTRADE_AUTH_HOST = "https://authapi.flattrade.in"
 
 
 def sha256_hash(text):
@@ -106,3 +109,105 @@ def authenticate_broker_oauth(code):
 
     except Exception as e:
         return None, f"An exception occurred: {str(e)}"
+
+
+def authenticate_broker_totp(user_id, password, totp_code):
+    """
+    Authenticate with Flattrade using programmatic TOTP flow (no browser redirect).
+    
+    Steps:
+    1. Get session ID (SID)
+    2. SHA-256 hash the password
+    3. POST /ftauth with user_id, hashed password, TOTP → get redirect URL with code
+    4. Compute api_secret = SHA-256(api_key + code + secret_key)
+    5. POST /trade/apitoken → get access token
+    
+    Args:
+        user_id: Flattrade user ID
+        password: Flattrade login password (will be SHA-256 hashed)
+        totp_code: Generated TOTP code
+    
+    Returns:
+        Tuple of (access_token, error_message)
+    """
+    try:
+        full_api_key = os.getenv("BROKER_API_KEY", "")
+        BROKER_API_KEY = full_api_key.split(":::")[1] if ":::" in full_api_key else full_api_key
+        BROKER_API_SECRET = os.getenv("BROKER_API_SECRET", "")
+
+        if not BROKER_API_KEY or not BROKER_API_SECRET:
+            return None, "BROKER_API_KEY or BROKER_API_SECRET not configured"
+
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Referer": "https://auth.flattrade.in/",
+        }
+
+        with httpx.Client(timeout=30.0, follow_redirects=True, headers=headers) as client:
+            # Step 1: Get session ID
+            ses_url = f"{FLATTRADE_AUTH_HOST}/auth/session"
+            res = client.post(ses_url)
+            sid = res.text.strip()
+            if not sid:
+                return None, "Failed to get session ID from Flattrade"
+            logger.debug(f"Flattrade SID obtained: {sid[:10]}...")
+
+            # Step 2: SHA-256 hash the password
+            password_hash = hashlib.sha256(password.encode()).hexdigest()
+
+            # Step 3: Authenticate with TOTP
+            auth_url = f"{FLATTRADE_AUTH_HOST}/ftauth"
+            payload = {
+                "UserName": user_id,
+                "Password": password_hash,
+                "PAN_DOB": totp_code,
+                "App": "",
+                "ClientID": "",
+                "Key": "",
+                "APIKey": BROKER_API_KEY,
+                "Sid": sid,
+                "Override": "Y",
+                "Source": "AUTHPAGE",
+            }
+            res2 = client.post(auth_url, json=payload)
+            res2_json = res2.json()
+
+            if "RedirectURL" not in res2_json or not res2_json["RedirectURL"]:
+                error_msg = res2_json.get("emsg", "No RedirectURL in response")
+                logger.error(f"Flattrade TOTP auth failed: {error_msg}")
+                return None, f"Flattrade auth failed: {error_msg}"
+
+            redirect_url = res2_json["RedirectURL"]
+            logger.debug(f"Flattrade redirect URL obtained")
+
+            # Step 4: Extract request code from redirect URL
+            parsed = urlparse(redirect_url)
+            query_params = parse_qs(parsed.query)
+            if "code" not in query_params:
+                return None, f"No 'code' found in redirect URL: {redirect_url}"
+            req_code = query_params["code"][0]
+
+            # Step 5: Generate API secret and exchange for token
+            api_secret_raw = BROKER_API_KEY + req_code + BROKER_API_SECRET
+            api_secret = hashlib.sha256(api_secret_raw.encode()).hexdigest()
+
+            token_url = f"{FLATTRADE_AUTH_HOST}/trade/apitoken"
+            token_payload = {
+                "api_key": BROKER_API_KEY,
+                "request_code": req_code,
+                "api_secret": api_secret,
+            }
+            res3 = client.post(token_url, json=token_payload)
+            res3_json = res3.json()
+
+            if res3_json.get("stat") == "Ok" and "token" in res3_json:
+                logger.info(f"Flattrade TOTP authentication successful for {user_id}")
+                return res3_json["token"], None
+            else:
+                error_msg = res3_json.get("emsg", "Token exchange failed")
+                return None, f"Flattrade token exchange failed: {error_msg}"
+
+    except Exception as e:
+        logger.exception(f"Flattrade TOTP auth exception: {e}")
+        return None, f"Flattrade TOTP auth error: {str(e)}"

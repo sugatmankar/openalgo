@@ -363,8 +363,8 @@ def get_pnl_data():
         symbol_trades = {}
         for trade in trades:
             try:
-                symbol = trade.get("symbol", "")
-                exchange = trade.get("exchange", "")
+                symbol = str(trade.get("symbol", "")).strip()
+                exchange = str(trade.get("exchange", "")).strip()
                 if not symbol or not exchange:
                     logger.warning(f"Trade missing symbol or exchange: {trade}")
                     continue
@@ -400,8 +400,8 @@ def get_pnl_data():
                 key=lambda x: x.get("parsed_time") or datetime.min.replace(tzinfo=pytz.UTC)
             )
 
-            symbol = trades_list[0].get("symbol", "")
-            exchange = trades_list[0].get("exchange", "")
+            symbol = str(trades_list[0].get("symbol", "")).strip()
+            exchange = str(trades_list[0].get("exchange", "")).strip()
 
             if not symbol or not exchange:
                 logger.warning(f"Missing symbol or exchange for {symbol_key}")
@@ -435,21 +435,58 @@ def get_pnl_data():
 
                 # Track position windows
                 if action == "BUY":
-                    position_windows.append(
-                        {
-                            "start_time": trade_time,
-                            "end_time": None,  # Will be filled when position is closed
-                            "qty": qty,
-                            "price": executed_price,
-                            "action": "BUY",
-                            "exit_price": None,  # Will be filled when position is closed
-                        }
-                    )
-                    net_position += qty
+                    if net_position < 0:
+                        # This BUY is closing a short position
+                        remaining_qty = qty
+                        for window in position_windows:
+                            if (
+                                window["action"] == "SELL"
+                                and window["end_time"] is None
+                                and remaining_qty > 0
+                            ):
+                                # Close this short position window
+                                close_qty = min(window["qty"], remaining_qty)
+                                if close_qty == window["qty"]:
+                                    window["end_time"] = trade_time
+                                    window["exit_price"] = executed_price
+                                else:
+                                    # Partial close - split the window
+                                    window["qty"] -= close_qty
+                                    closed_window = window.copy()
+                                    closed_window["qty"] = close_qty
+                                    closed_window["end_time"] = trade_time
+                                    closed_window["exit_price"] = executed_price
+                                    position_windows.append(closed_window)
+                                remaining_qty -= close_qty
+                        net_position += qty
+                        # If there's remaining qty after closing shorts, open a new long window
+                        if remaining_qty > 0:
+                            position_windows.append(
+                                {
+                                    "start_time": trade_time,
+                                    "end_time": None,
+                                    "qty": remaining_qty,
+                                    "price": executed_price,
+                                    "action": "BUY",
+                                    "exit_price": None,
+                                }
+                            )
+                    else:
+                        # This is opening a new long position
+                        position_windows.append(
+                            {
+                                "start_time": trade_time,
+                                "end_time": None,
+                                "qty": qty,
+                                "price": executed_price,
+                                "action": "BUY",
+                                "exit_price": None,
+                            }
+                        )
+                        net_position += qty
                 else:  # SELL
-                    # Check if this closes a position
                     if net_position > 0:
-                        # This is closing a long position
+                        # This SELL is closing a long position
                         remaining_qty = qty
                         for window in position_windows:
                             if (
@@ -457,28 +494,35 @@ def get_pnl_data():
                                 and window["end_time"] is None
                                 and remaining_qty > 0
                             ):
-                                # Close this position window
+                                # Close this long position window
                                 close_qty = min(window["qty"], remaining_qty)
                                 if close_qty == window["qty"]:
                                     window["end_time"] = trade_time
-                                    window["exit_price"] = (
-                                        executed_price  # Store the actual exit price
-                                    )
+                                    window["exit_price"] = executed_price
                                 else:
                                     # Partial close - split the window
                                     window["qty"] -= close_qty
-                                    # Create a closed window for the partial
                                     closed_window = window.copy()
                                     closed_window["qty"] = close_qty
                                     closed_window["end_time"] = trade_time
-                                    closed_window["exit_price"] = (
-                                        executed_price  # Store the actual exit price
-                                    )
+                                    closed_window["exit_price"] = executed_price
                                     position_windows.append(closed_window)
                                 remaining_qty -= close_qty
                         net_position -= qty
+                        # If there's remaining qty after closing longs, open a new short window
+                        if remaining_qty > 0:
+                            position_windows.append(
+                                {
+                                    "start_time": trade_time,
+                                    "end_time": None,
+                                    "qty": remaining_qty,
+                                    "price": executed_price,
+                                    "action": "SELL",
+                                    "exit_price": None,
+                                }
+                            )
                     else:
-                        # This is a short position
+                        # This is opening a new short position
                         position_windows.append(
                             {
                                 "start_time": trade_time,
@@ -957,10 +1001,11 @@ def get_pnl_data():
                     continue
 
             # If we still couldn't get any historical data, create a simple flat line
+            # This handles brokers that don't support historical data (e.g., Kotak Neo)
             if portfolio_pnl is None:
                 ist = pytz.timezone("Asia/Kolkata")
                 current_time = datetime.now(ist)
-                start_time = current_time.replace(hour=9, minute=0, second=0, microsecond=0)
+                start_time = current_time.replace(hour=9, minute=15, second=0, microsecond=0)
                 end_time = current_time
 
                 if end_time <= start_time:
@@ -969,9 +1014,47 @@ def get_pnl_data():
                 time_range = pd.date_range(start=start_time, end=end_time, freq="1min", tz=ist)
                 portfolio_pnl = pd.DataFrame(index=time_range)
 
-                # Use current position P&L as constant value
+                # Try position P&L first
                 total_pnl = sum(pos["pnl"] for pos in current_positions.values())
+
+                # If position PnL is zero but trades exist, calculate realized PnL from trades
+                if total_pnl == 0 and trades:
+                    realized_pnl = 0.0
+                    for trade in trades:
+                        try:
+                            action = trade.get("action", "")
+                            price = float(trade.get("average_price", 0))
+                            qty = float(trade.get("quantity", 0))
+                            if qty == 0 and price > 0:
+                                trade_value = float(trade.get("trade_value", 0))
+                                if trade_value == price:
+                                    qty = 1
+                                elif trade_value > 0:
+                                    qty = trade_value / price
+                            if action == "BUY":
+                                realized_pnl -= price * qty  # money out
+                            elif action == "SELL":
+                                realized_pnl += price * qty  # money in
+                        except (TypeError, ValueError):
+                            continue
+
+                    # Add unrealized PnL for open positions
+                    for pos in current_positions.values():
+                        pos_qty = pos.get("quantity", 0)
+                        ltp = pos.get("ltp", 0)
+                        avg = pos.get("average_price", 0)
+                        if pos_qty != 0 and ltp > 0:
+                            if pos_qty > 0:
+                                realized_pnl += (ltp - avg) * pos_qty
+                            else:
+                                realized_pnl += (avg - ltp) * abs(pos_qty)
+
+                    if realized_pnl != 0:
+                        total_pnl = realized_pnl
+                        logger.info(f"Calculated realized PnL from trades: {total_pnl:.2f}")
+
                 portfolio_pnl["Total_PnL"] = total_pnl
+                logger.info(f"Created flat-line PnL (no historical data): {total_pnl:.2f}")
             else:
                 # Historical data was fetched for positions - calculate Total_PnL
                 portfolio_pnl = portfolio_pnl.ffill().fillna(0)
@@ -1007,22 +1090,70 @@ def get_pnl_data():
             portfolio_pnl = portfolio_pnl.ffill().fillna(0)
             portfolio_pnl["Total_PnL"] = portfolio_pnl.sum(axis=1)
         else:
-            # No data at all
-            return jsonify(
-                {
-                    "status": "success",
-                    "data": {
-                        "current_mtm": 0,
-                        "max_mtm": 0,
-                        "max_mtm_time": None,
-                        "min_mtm": 0,
-                        "min_mtm_time": None,
-                        "max_drawdown": 0,
-                        "pnl_series": [],
-                        "drawdown_series": [],
-                    },
-                }
-            ), 200
+            # No historical data and no positions (or portfolio_pnl is None without positions)
+            # Try to calculate PnL from trades if available (for brokers without historical data)
+            if trades:
+                realized_pnl = 0.0
+                for trade in trades:
+                    try:
+                        action = trade.get("action", "")
+                        price = float(trade.get("average_price", 0))
+                        qty = float(trade.get("quantity", 0))
+                        if qty == 0 and price > 0:
+                            trade_value = float(trade.get("trade_value", 0))
+                            if trade_value == price:
+                                qty = 1
+                            elif trade_value > 0:
+                                qty = trade_value / price
+                        if action == "BUY":
+                            realized_pnl -= price * qty
+                        elif action == "SELL":
+                            realized_pnl += price * qty
+                    except (TypeError, ValueError):
+                        continue
+
+                if realized_pnl != 0:
+                    ist = pytz.timezone("Asia/Kolkata")
+                    current_time = datetime.now(ist)
+                    start_time = current_time.replace(hour=9, minute=15, second=0, microsecond=0)
+                    if current_time <= start_time:
+                        current_time = start_time + timedelta(minutes=1)
+                    time_range = pd.date_range(start=start_time, end=current_time, freq="1min", tz=ist)
+                    portfolio_pnl = pd.DataFrame(index=time_range)
+                    portfolio_pnl["Total_PnL"] = realized_pnl
+                    logger.info(f"Created trade-based flat PnL (no history/positions): {realized_pnl:.2f}")
+                else:
+                    return jsonify(
+                        {
+                            "status": "success",
+                            "data": {
+                                "current_mtm": 0,
+                                "max_mtm": 0,
+                                "max_mtm_time": None,
+                                "min_mtm": 0,
+                                "min_mtm_time": None,
+                                "max_drawdown": 0,
+                                "pnl_series": [],
+                                "drawdown_series": [],
+                            },
+                        }
+                    ), 200
+            else:
+                return jsonify(
+                    {
+                        "status": "success",
+                        "data": {
+                            "current_mtm": 0,
+                            "max_mtm": 0,
+                            "max_mtm_time": None,
+                            "min_mtm": 0,
+                            "min_mtm_time": None,
+                            "max_drawdown": 0,
+                            "pnl_series": [],
+                            "drawdown_series": [],
+                        },
+                    }
+                ), 200
 
         # Calculate drawdown
         portfolio_pnl["Peak"] = portfolio_pnl["Total_PnL"].cummax()

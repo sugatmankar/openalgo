@@ -152,8 +152,8 @@ def map_trade_data(trade_data):
     Returns:
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
-    # Check if 'data' is None
-    if trade_data["data"] is None:
+    # Check if 'data' is None or missing
+    if "data" not in trade_data or trade_data["data"] is None:
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
@@ -224,10 +224,10 @@ def transform_positions_data(positions_data):
             "symbol": position.get("tradingsymbol", ""),
             "exchange": position.get("exchange", ""),
             "product": position.get("producttype", ""),
-            "quantity": position.get("netqty", 0),
-            "average_price": position.get("avgnetprice", 0.0),
-            "ltp": position.get("ltp", 0.0),
-            "pnl": position.get("pnl", 0.0),
+            "quantity": int(position.get("netqty", 0)),
+            "average_price": float(position.get("avgnetprice", 0.0)),
+            "ltp": float(position.get("ltp", 0.0)),
+            "pnl": float(position.get("pnl", 0.0)),
         }
         transformed_data.append(transformed_position)
     return transformed_data

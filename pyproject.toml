@@ -152,6 +152,8 @@ dependencies = [
   "WTForms==3.2.1",
   "zipp==3.23.0",
   "zmq==0.0.0",
+  "curl-cffi>=0.14.0",
+  "upstox-totp>=1.0.8",
 ]
 
 [build-system]

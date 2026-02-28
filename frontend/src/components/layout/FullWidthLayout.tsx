@@ -7,15 +7,13 @@ import { useAuthStore } from '@/stores/authStore'
  * No container constraints, minimal chrome.
  */
 export function FullWidthLayout() {
-  const { isAuthenticated, user } = useAuthStore()
+  const { isAuthenticated } = useAuthStore()
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />
   }
 
-  if (!user?.broker) {
-    return <Navigate to="/broker" replace />
-  }
+  // Broker connection is optional with multi-account system
 
   return (
     <SocketProvider>

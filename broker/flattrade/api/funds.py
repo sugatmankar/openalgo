@@ -34,10 +34,20 @@ def fetch_data(endpoint, payload, headers, client):
     return response.json()
 
 
+def get_flattrade_userid():
+    """Get Flattrade user ID from BROKER_API_KEY (format: userid:::apikey)."""
+    full_api_key = os.getenv("BROKER_API_KEY", "")
+    if ":::" in full_api_key:
+        return full_api_key.split(":::")[0]
+    # Fallback: the whole key might be just the user_id or might be wrong
+    # Log a warning so we can identify issues
+    logger.warning("BROKER_API_KEY does not contain ':::' separator for Flattrade")
+    return full_api_key
+
+
 def get_margin_data(auth_token):
     """Fetch and process margin and position data."""
-    full_api_key = os.getenv("BROKER_API_KEY")
-    userid = full_api_key.split(":::")[0]
+    userid = get_flattrade_userid()
     actid = userid
 
     # Prepare payload

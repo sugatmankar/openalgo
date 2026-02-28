@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 
 from dotenv import load_dotenv
@@ -214,11 +215,11 @@ def load_and_check_env_variables():
     load_dotenv(dotenv_path=env_path, override=True)
 
     # Define the required environment variables
+    # Note: BROKER_API_KEY, BROKER_API_SECRET, and REDIRECT_URL are no longer
+    # required here since broker credentials are managed in the database
+    # via the multi-account broker system (Broker Accounts page).
     required_vars = [
         "ENV_CONFIG_VERSION",  # Version tracking for configuration compatibility
-        "BROKER_API_KEY",
-        "BROKER_API_SECRET",
-        "REDIRECT_URL",
         "APP_KEY",
         "API_KEY_PEPPER",  # Added API_KEY_PEPPER as it's required for security
         "DATABASE_URL",
@@ -256,60 +257,9 @@ def load_and_check_env_variables():
         print("\nSolution: Check .sample.env for the latest configuration format")
         sys.exit(1)
 
-    # Special validation for broker-specific API key formats
-    broker_api_key = os.getenv("BROKER_API_KEY", "")
-    broker_api_secret = os.getenv("BROKER_API_SECRET", "")
-    redirect_url = os.getenv("REDIRECT_URL", "")
-
-    # Extract broker name from redirect URL for validation
-    broker_name = None
-    try:
-        import re
-
-        match = re.search(r"/([^/]+)/callback$", redirect_url)
-        if match:
-            broker_name = match.group(1).lower()
-    except:
-        pass
-
-    # Validate 5paisa API key format
-    if broker_name == "fivepaisa":
-        if ":::" not in broker_api_key or broker_api_key.count(":::") != 2:
-            print("\nError: Invalid 5paisa API key format detected!")
-            print("The BROKER_API_KEY for 5paisa must be in the format:")
-            print("  BROKER_API_KEY = 'User_Key:::User_ID:::client_id'")
-            print("\nExample:")
-            print("  BROKER_API_KEY = 'abc123xyz:::12345678:::5P12345678'")
-            print("  BROKER_API_SECRET = 'your_encryption_key'")
-            print("\nFor detailed instructions, please refer to:")
-            print("  https://docs.openalgo.in/connect-brokers/brokers/5paisa")
-            sys.exit(1)
-
-    # Validate flattrade API key format
-    elif broker_name == "flattrade":
-        if ":::" not in broker_api_key or broker_api_key.count(":::") != 1:
-            print("\nError: Invalid Flattrade API key format detected!")
-            print("The BROKER_API_KEY for Flattrade must be in the format:")
-            print("  BROKER_API_KEY = 'client_id:::api_key'")
-            print("\nExample:")
-            print("  BROKER_API_KEY = 'FT123456:::your_api_key_here'")
-            print("  BROKER_API_SECRET = 'your_api_secret'")
-            print("\nFor detailed instructions, please refer to:")
-            print("  https://docs.openalgo.in/connect-brokers/brokers/flattrade")
-            sys.exit(1)
-
-    # Validate dhan API key format
-    elif broker_name == "dhan":
-        if ":::" not in broker_api_key or broker_api_key.count(":::") != 1:
-            print("\nError: Invalid Dhan API key format detected!")
-            print("The BROKER_API_KEY for Dhan must be in the format:")
-            print("  BROKER_API_KEY = 'client_id:::api_key'")
-            print("\nExample:")
-            print("  BROKER_API_KEY = '1234567890:::your_dhan_apikey'")
-            print("  BROKER_API_SECRET = 'your_dhan_apisecret'")
-            print("\nFor detailed instructions, please refer to:")
-            print("  https://docs.openalgo.in/connect-brokers/brokers/dhan")
-            sys.exit(1)
+    # Broker-specific API key/secret and format validations are no longer
+    # enforced at startup. Broker credentials are managed per-account in the
+    # database via the multi-account broker system.
 
     # Validate environment variable values
     flask_debug = os.getenv("FLASK_DEBUG", "").lower()
@@ -343,64 +293,24 @@ def load_and_check_env_variables():
         print("Example: WEBSOCKET_PORT='8765'")
         sys.exit(1)
 
-    # Check REDIRECT_URL configuration
-    redirect_url = os.getenv("REDIRECT_URL")
+    # REDIRECT_URL and broker validation are now optional.
+    # With the multi-account broker system, broker credentials and OAuth
+    # callbacks are managed per-account in the database.
+    # We still warn if not configured, but don't block startup.
+    redirect_url = os.getenv("REDIRECT_URL", "")
     default_value = "http://127.0.0.1:5000/<broker>/callback"
 
-    if redirect_url == default_value:
-        print("\nError: Default REDIRECT_URL detected in .env file.")
-        print("The application cannot start with the default configuration.")
-        print("\nPlease:")
-        print("1. Open your .env file")
-        print("2. Change the REDIRECT_URL to use your specific broker")
-        print("3. Save the file")
-        print("\nExample: If using Zerodha, change:")
-        print(f"  REDIRECT_URL = '{default_value}'")
-        print("to:")
-        print("  REDIRECT_URL = 'http://127.0.0.1:5000/zerodha/callback'")
-        sys.exit(1)
+    if not redirect_url or redirect_url == default_value or "<broker>" in redirect_url:
+        print("\n⚠️  REDIRECT_URL is not configured for a specific broker.")
+        print("   You can configure brokers via the Broker Accounts page in the UI.")
+        print("   Or set REDIRECT_URL in .env for legacy single-broker mode.\n")
 
-    if "<broker>" in redirect_url:
-        print("\nError: Invalid REDIRECT_URL configuration detected.")
-        print("The application cannot start with '<broker>' in REDIRECT_URL.")
-        print("\nPlease update your .env file to use your specific broker name.")
-        print("Example: http://127.0.0.1:5000/zerodha/callback")
-        sys.exit(1)
-
-    # Validate broker name
+    # Validate VALID_BROKERS if present
     valid_brokers_str = os.getenv("VALID_BROKERS", "")
     if not valid_brokers_str:
-        print("\nError: VALID_BROKERS not configured in .env file.")
-        print("\nSolution: Check the .sample.env file for the latest configuration")
-        print("The application cannot start without valid broker configuration.")
-        sys.exit(1)
-
-    valid_brokers = set(broker.strip().lower() for broker in valid_brokers_str.split(","))
-
-    try:
-        import re
-
-        match = re.search(r"/([^/]+)/callback$", redirect_url)
-        if not match:
-            print("\nError: Invalid REDIRECT_URL format.")
-            print("The URL must end with '/broker_name/callback'")
-            print("Example: http://127.0.0.1:5000/zerodha/callback")
-            sys.exit(1)
-
-        broker_name = match.group(1).lower()
-        if broker_name not in valid_brokers:
-            print("\nError: Invalid broker name in REDIRECT_URL.")
-            print(f"Broker '{broker_name}' is not in the list of valid brokers.")
-            print(f"\nValid brokers are: {', '.join(sorted(valid_brokers))}")
-            print("\nPlease update your REDIRECT_URL with a valid broker name.")
-            sys.exit(1)
-
-    except Exception as e:
-        print("\nError: Could not validate REDIRECT_URL format.")
-        print(f"Details: {str(e)}")
-        print("\nThe URL must follow the format: http://domain/broker_name/callback")
-        print("Example: http://127.0.0.1:5000/zerodha/callback")
-        sys.exit(1)
+        print("\n⚠️  VALID_BROKERS not configured in .env file.")
+        print("   The application will start but broker functionality may be limited.")
+        print("   Check .sample.env for the recommended configuration.\n")
 
     # Validate rate limits format
     rate_limit_vars = [

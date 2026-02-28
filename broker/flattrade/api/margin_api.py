@@ -22,7 +22,7 @@ def calculate_margin_api(positions, auth):
     AUTH_TOKEN = auth
 
     # Get account ID from BROKER_API_KEY
-    full_api_key = os.getenv("BROKER_API_KEY")
+    full_api_key = os.getenv("BROKER_API_KEY", "")
     if not full_api_key:
         error_response = {"status": "error", "message": "BROKER_API_KEY not configured"}
 
@@ -33,7 +33,10 @@ def calculate_margin_api(positions, auth):
         return MockResponse(), error_response
 
     # Extract account ID (first part before :::)
-    account_id = full_api_key.split(":::")[0]
+    if ":::" in full_api_key:
+        account_id = full_api_key.split(":::")[0]
+    else:
+        account_id = full_api_key
 
     # Transform positions to Flattrade format
     margin_data = transform_margin_positions(positions, account_id)

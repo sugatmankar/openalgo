@@ -6,6 +6,7 @@ Uses database lookup for brsymbol mapping
 
 import json
 import logging
+import os
 from typing import Dict, List, Optional, Tuple
 
 import requests
@@ -66,6 +67,13 @@ class FyersTokenConverter:
 
         # Store full access token for API calls
         self.access_token = access_token
+
+        # Build full auth header: Fyers API expects "api_key:access_token" format
+        api_key = os.getenv("BROKER_API_KEY", "")
+        if api_key and ":" not in access_token:
+            self.auth_header = f"{api_key}:{access_token}"
+        else:
+            self.auth_header = access_token
 
         self.symbols_token_api = "https://api-t1.fyers.in/data/symbol-token"
         self.database_available = DATABASE_AVAILABLE
@@ -191,7 +199,7 @@ class FyersTokenConverter:
                     response = requests.post(
                         url=self.symbols_token_api,
                         headers={
-                            "Authorization": self.access_token,
+                            "Authorization": self.auth_header,
                             "Content-Type": "application/json",
                         },
                         json=data,

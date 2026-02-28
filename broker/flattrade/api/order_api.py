@@ -17,11 +17,19 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def get_flattrade_userid():
+    """Get Flattrade user ID from BROKER_API_KEY (format: userid:::apikey)."""
+    full_api_key = os.getenv("BROKER_API_KEY", "")
+    if ":::" in full_api_key:
+        return full_api_key.split(":::")[0]
+    logger.warning("BROKER_API_KEY does not contain ':::' separator for Flattrade")
+    return full_api_key
+
+
 def get_api_response(endpoint, auth, method="GET", payload=""):
     AUTH_TOKEN = auth
 
-    full_api_key = os.getenv("BROKER_API_KEY")
-    api_key = full_api_key.split(":::")[0]
+    api_key = get_flattrade_userid()
 
     data = f'{{"uid": "{api_key}", "actid": "{api_key}"}}'
 
@@ -101,8 +109,7 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
 def place_order_api(data, auth):
     AUTH_TOKEN = auth
 
-    full_api_key = os.getenv("BROKER_API_KEY")
-    BROKER_API_KEY = full_api_key.split(":::")[0]
+    BROKER_API_KEY = get_flattrade_userid()
     data["apikey"] = BROKER_API_KEY
     token = get_token(data["symbol"], data["exchange"])
     newdata = transform_data(data, token, AUTH_TOKEN)
@@ -267,8 +274,7 @@ def close_all_positions(current_api_key, auth):
 def cancel_order(orderid, auth):
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
-    full_api_key = os.getenv("BROKER_API_KEY")
-    api_key = full_api_key.split(":::")[0]
+    api_key = get_flattrade_userid()
     data = {"uid": api_key, "norenordno": orderid}
 
     payload = "jData=" + json.dumps(data) + "&jKey=" + AUTH_TOKEN
@@ -298,8 +304,7 @@ def cancel_order(orderid, auth):
 def modify_order(data, auth):
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
-    full_api_key = os.getenv("BROKER_API_KEY")
-    api_key = full_api_key.split(":::")[0]
+    api_key = get_flattrade_userid()
 
     token = get_token(data["symbol"], data["exchange"])
     data["symbol"] = get_br_symbol(data["symbol"], data["exchange"])

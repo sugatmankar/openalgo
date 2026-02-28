@@ -41,6 +41,8 @@ def validate_symbol_exchange(symbol: str, exchange: str) -> tuple[bool, str | No
         Tuple of (is_valid, error_message)
     """
     # Validate exchange
+    if not isinstance(exchange, str) or not exchange.strip():
+        return False, f"Invalid exchange value: {exchange!r}. Exchange must be a non-empty string."
     exchange_upper = exchange.upper()
     if exchange_upper not in VALID_EXCHANGES:
         return False, f"Invalid exchange '{exchange}'. Must be one of: {', '.join(VALID_EXCHANGES)}"

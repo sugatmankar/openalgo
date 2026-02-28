@@ -9,10 +9,18 @@ load_dotenv(override=True)
 
 
 def get_broker_api_key():
+    """
+    Get the broker API key. Checks os.environ first (supports per-account
+    overrides set by the multi-account system) then falls back to .env defaults.
+    """
     return os.getenv("BROKER_API_KEY")
 
 
 def get_broker_api_secret():
+    """
+    Get the broker API secret. Checks os.environ first (supports per-account
+    overrides set by the multi-account system) then falls back to .env defaults.
+    """
     return os.getenv("BROKER_API_SECRET")
 
 

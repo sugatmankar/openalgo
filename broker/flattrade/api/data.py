@@ -19,13 +19,21 @@ USE_ASYNC = True  # Set to True to use asyncio (better performance)
 logger = get_logger(__name__)
 
 
+def get_flattrade_userid():
+    """Get Flattrade user ID from BROKER_API_KEY (format: userid:::apikey)."""
+    full_api_key = os.getenv("BROKER_API_KEY", "")
+    if ":::" in full_api_key:
+        return full_api_key.split(":::")[0]
+    logger.warning("BROKER_API_KEY does not contain ':::' separator for Flattrade")
+    return full_api_key
+
+
 def get_api_response(endpoint, auth, method="POST", payload=None):
     """
     Common function to make API calls to Flattrade using httpx with connection pooling
     """
     AUTH_TOKEN = auth
-    full_api_key = os.getenv("BROKER_API_KEY")
-    api_key = full_api_key.split(":::")[0]
+    api_key = get_flattrade_userid()
 
     if payload is None:
         data = {"uid": api_key, "actid": api_key}
@@ -96,7 +104,7 @@ class BrokerData:
                 exchange = "BSE"
 
             payload = {
-                "uid": os.getenv("BROKER_API_KEY").split(":::")[0],
+                "uid": get_flattrade_userid(),
                 "exch": exchange,
                 "token": token,
             }
@@ -318,8 +326,7 @@ class BrokerData:
         prepared_symbols = []
 
         # Pre-fetch API key
-        full_api_key = os.getenv("BROKER_API_KEY")
-        api_key = full_api_key.split(":::")[0]
+        api_key = get_flattrade_userid()
 
         # Step 1: Pre-resolve all tokens sequentially (database access)
         for item in symbols:
@@ -438,7 +445,7 @@ class BrokerData:
                 exchange = "BSE"
 
             payload = {
-                "uid": os.getenv("BROKER_API_KEY").split(":::")[0],
+                "uid": get_flattrade_userid(),
                 "exch": exchange,
                 "token": token,
             }
@@ -564,7 +571,7 @@ class BrokerData:
             else:
                 # For intraday data, use TPSeries endpoint
                 payload = {
-                    "uid": os.getenv("BROKER_API_KEY").split(":::")[0],
+                    "uid": get_flattrade_userid(),
                     "exch": exchange,
                     "token": token,
                     "st": str(start_ts),  # Start time in epoch

@@ -26,11 +26,12 @@ export function AuthSync({ children }: AuthSyncProps) {
         if (response.ok) {
           const data = await response.json()
 
-          if (data.status === 'success' && data.logged_in && data.broker) {
-            // Flask session is authenticated with broker - sync to Zustand
+          if (data.status === 'success' && data.logged_in) {
+            // User is logged in - sync to Zustand
+            // Broker connection is optional with multi-account system
             setUser({
               username: data.user,
-              broker: data.broker,
+              broker: data.broker || null,
               isLoggedIn: true,
               loginTime: new Date().toISOString(),
             })
@@ -40,14 +41,15 @@ export function AuthSync({ children }: AuthSyncProps) {
             }
             // Also sync app mode from backend
             await syncAppMode()
-          } else if (data.status === 'success' && data.authenticated && !data.logged_in) {
-            // User is logged in but hasn't connected broker yet
+          } else if (data.status === 'success' && data.authenticated) {
+            // User authenticated but logged_in not set (legacy path)
             setUser({
               username: data.user,
-              broker: null,
-              isLoggedIn: false,
-              loginTime: null,
+              broker: data.broker || null,
+              isLoggedIn: true,
+              loginTime: new Date().toISOString(),
             })
+            await syncAppMode()
           } else {
             // Not authenticated or status is not success - clear Zustand store
             logout()

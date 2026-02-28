@@ -13,10 +13,12 @@ logger = get_logger(__name__)
 def authenticate_broker(mobile_number, totp, mpin):
     """
     Authenticate with Kotak using TOTP and MPIN flow.
+    Legacy interface for brlogin.py (single-account mode).
 
-    Steps:
-    1. Login with TOTP to get View token and sid
-    2. Validate with MPIN to get Trading token and sid
+    In single-account mode:
+    - BROKER_API_KEY = consumer_key (access token for Authorization header)
+    - BROKER_API_SECRET = consumer_secret (not used for auth)
+    - UCC comes from the form or is not needed if consumer_key encodes it
 
     Args:
         mobile_number: Mobile number with +91 prefix
@@ -25,32 +27,66 @@ def authenticate_broker(mobile_number, totp, mpin):
 
     Returns:
         Tuple of (auth_string, error_message)
-        auth_string format: "trading_token:::trading_sid:::base_url:::access_token"
+    """
+    from utils.config import get_broker_api_key, get_broker_api_secret
 
-        Components:
-        - trading_token: Used in 'Auth' header for API calls
-        - trading_sid: Used in 'Sid' header for API calls
-        - base_url: Base URL for all API endpoints (e.g., https://cis.kotaksecurities.com)
-        - access_token: Original API access token (kept for reference)
+    consumer_key = get_broker_api_key()
+    return _authenticate_kotak(mobile_number, totp, mpin, consumer_key=consumer_key)
+
+
+def authenticate_broker_totp(mobile_number, mpin, totp_code, consumer_key=None, ucc=None):
+    """
+    Authenticate with Kotak using TOTP and MPIN flow.
+    Used by multi-account auto-auth.
+
+    Args:
+        mobile_number: Mobile number
+        mpin: 6-digit trading MPIN
+        totp_code: 6-digit TOTP code (pre-generated)
+        consumer_key: Consumer key / access token for Authorization header
+        ucc: Unique Client Code (optional, for the login payload)
+
+    Returns:
+        Tuple of (auth_string, error_message)
+    """
+    if not consumer_key:
+        from utils.config import get_broker_api_key
+        consumer_key = get_broker_api_key()
+
+    return _authenticate_kotak(mobile_number, totp_code, mpin, consumer_key=consumer_key, ucc=ucc)
+
+
+def _authenticate_kotak(mobile_number, totp, mpin, consumer_key=None, ucc=None):
+    """
+    Internal Kotak authentication implementation.
+
+    Steps:
+    1. Login with TOTP to get View token and sid
+    2. Validate with MPIN to get Trading token and sid
+
+    Args:
+        mobile_number: Mobile number
+        totp: 6-digit TOTP code
+        mpin: 6-digit trading MPIN
+        consumer_key: Consumer key for Authorization header (from BROKER_API_KEY or account)
+        ucc: Unique Client Code (optional)
+
+    Returns:
+        Tuple of (auth_string, error_message)
+        auth_string format: "trading_token:::trading_sid:::base_url:::consumer_key"
     """
     try:
         logger.info("Starting Kotak TOTP authentication flow")
 
-        # Get UCC from BROKER_API_KEY and access_token from BROKER_API_SECRET
-        from utils.config import get_broker_api_key, get_broker_api_secret
+        if not consumer_key:
+            from utils.config import get_broker_api_key
+            consumer_key = get_broker_api_key()
 
-        ucc = get_broker_api_key()
-        access_token = get_broker_api_secret()
+        if not consumer_key:
+            logger.error("Consumer key (BROKER_API_KEY) is not configured")
+            return None, "Consumer key (BROKER_API_KEY) is required"
 
-        if not ucc:
-            logger.error("BROKER_API_KEY (UCC) is not configured")
-            return None, "BROKER_API_KEY (UCC) is required in .env file"
-
-        if not access_token:
-            logger.error("BROKER_API_SECRET (Access Token) is not configured")
-            return None, "BROKER_API_SECRET (Access Token) is required in .env file"
-
-        logger.debug(f"Parsed UCC: {ucc}, Access Token length: {len(access_token)}")
+        logger.debug(f"Consumer key length: {len(consumer_key)}, UCC: {ucc or 'not provided'}")
 
         # Ensure mobile number has +91 prefix
         # Handle all cases: +919876543210, 919876543210, 9876543210
@@ -66,15 +102,21 @@ def authenticate_broker(mobile_number, totp, mpin):
         client = get_httpx_client()
 
         # Step 1: Login with TOTP
-        payload = json.dumps({"mobileNumber": mobile_number, "ucc": ucc, "totp": totp})
+        # UCC is required by Kotak's API
+        if not ucc:
+            logger.error("UCC (Client Code) is required for Kotak authentication")
+            return None, "UCC (Client Code) is required for Kotak authentication"
+
+        login_body = {"mobileNumber": mobile_number, "ucc": ucc, "totp": totp}
+        payload = json.dumps(login_body)
 
         headers = {
-            "Authorization": access_token,
+            "Authorization": consumer_key,
             "neo-fin-key": "neotradeapi",
             "Content-Type": "application/json",
         }
 
-        logger.debug(f"TOTP Login Request - Mobile: {mobile_number[:5]}***, UCC: {ucc}")
+        logger.debug(f"TOTP Login Request - Mobile: {mobile_number[:5]}***, UCC: {ucc or 'not set'}")
 
         response = client.post(
             "https://mis.kotaksecurities.com/login/1.0/tradeApiLogin",
@@ -103,7 +145,7 @@ def authenticate_broker(mobile_number, totp, mpin):
         payload = json.dumps({"mpin": mpin})
 
         headers = {
-            "Authorization": access_token,
+            "Authorization": consumer_key,
             "neo-fin-key": "neotradeapi",
             "sid": view_sid,
             "Auth": view_token,
@@ -140,11 +182,11 @@ def authenticate_broker(mobile_number, totp, mpin):
         logger.info("Kotak TOTP authentication completed successfully")
         logger.debug(f"Base URL for API calls: {base_url}")
 
-        # Create auth string: trading_token:::trading_sid:::base_url:::access_token
+        # Create auth string: trading_token:::trading_sid:::base_url:::consumer_key
         # This format allows extracting all components needed for subsequent API calls
-        auth_string = f"{trading_token}:::{trading_sid}:::{base_url}:::{access_token}"
+        auth_string = f"{trading_token}:::{trading_sid}:::{base_url}:::{consumer_key}"
         logger.debug(
-            f"AUTH TOKEN CREATED: {trading_token[:10]}...:::{trading_sid}:::{base_url}:::{access_token[:10]}..."
+            f"AUTH TOKEN CREATED: {trading_token[:10]}...:::{trading_sid}:::{base_url}:::{consumer_key[:10]}..."
         )
 
         return auth_string, None

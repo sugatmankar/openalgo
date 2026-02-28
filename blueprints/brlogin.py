@@ -56,16 +56,36 @@ def broker_callback(broker, para=None):
             logger.warning(f"User not in session for {broker} callback, redirecting to login")
             return redirect(url_for("auth.login"))
 
-    if session.get("logged_in"):
-        # Store broker in session and g
-        session["broker"] = broker
-        return redirect(url_for("dashboard_bp.dashboard"))
+    if session.get("logged_in") and session.get("broker") and not session.get("pending_account_id"):
+        # Already authenticated with a broker AND not in a multi-account auth flow
+        # Check if there's actually a valid auth token before short-circuiting
+        from database.auth_db import get_auth_token
+        auth_token = get_auth_token(session.get("user"))
+        if auth_token:
+            session["broker"] = broker
+            return redirect(url_for("dashboard_bp.dashboard"))
 
     broker_auth_functions = app.broker_auth_functions
     auth_function = broker_auth_functions.get(f"{broker}_auth")
 
     if not auth_function:
         return jsonify(error="Broker authentication function not found."), 404
+
+    # If this is a multi-account auth flow (pending_account_id in session),
+    # restore the account's credentials into env vars before calling auth_function.
+    # This is needed because the OAuth redirect is a new request and env vars
+    # set during the initial /authenticate call may have been overwritten.
+    pending_account_id = session.get("pending_account_id")
+    if pending_account_id and "user" in session:
+        try:
+            from database.broker_account_db import get_broker_account
+            from blueprints.broker_accounts import _set_account_env
+            account = get_broker_account(pending_account_id, session["user"])
+            if account:
+                _set_account_env(account)
+                logger.info(f"Restored credentials for account {pending_account_id} in callback")
+        except Exception as e:
+            logger.warning(f"Could not restore account credentials in callback: {e}")
 
     # Initialize feed_token to None by default
     feed_token = None
@@ -697,7 +717,7 @@ def broker_callback(broker, para=None):
         session["broker"] = broker
         logger.info(f"Successfully connected broker: {broker}")
         if broker == "zerodha":
-            auth_token = f"{BROKER_API_KEY}:{auth_token}"
+            auth_token = f"{os.getenv('BROKER_API_KEY', '')}:{auth_token}"
         if broker == "dhan":
             auth_token = f"{auth_token}"
 

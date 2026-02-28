@@ -2,6 +2,7 @@ import {
   BarChart3,
   Bell,
   BookOpen,
+  Building2,
   ClipboardList,
   Code2,
   Database,
@@ -59,6 +60,7 @@ export const mobileSheetItems = navItems.filter((item) => !bottomNavPaths.includ
 // Profile dropdown menu items
 export const profileMenuItems: NavItem[] = [
   { href: '/profile', label: 'Profile', icon: User },
+  { href: '/broker-accounts', label: 'Broker Accounts', icon: Building2 },
   { href: '/apikey', label: 'API Key', icon: Key },
   { href: '/master-contract', label: 'Master Contract', icon: FileStack },
   { href: '/telegram', label: 'Telegram Bot', icon: MessageSquare },

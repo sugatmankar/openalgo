@@ -112,6 +112,17 @@ def get_tradebook_with_auth(
         # Get tradebook data using broker's implementation
         trade_data = broker_funcs["get_trade_book"](auth_token)
 
+        # Handle empty response (e.g., rate limit, parse failure)
+        if not trade_data or (isinstance(trade_data, dict) and not trade_data):
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": "Empty response from broker API (possible rate limit)",
+                },
+                500,
+            )
+
         if "status" in trade_data and trade_data["status"] == "error":
             return (
                 False,

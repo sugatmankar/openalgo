@@ -226,27 +226,32 @@ def map_position_data(position_data):
 def transform_positions_data(positions_data):
     transformed_data = []
     for position in positions_data:
+        buy_qty = float(position.get("flBuyQty", 0)) + float(position.get("cfBuyQty", 0))
+        sell_qty = float(position.get("flSellQty", 0)) + float(position.get("cfSellQty", 0))
+        net_qty = int(buy_qty - sell_qty)
+
+        buy_amt = float(position.get("buyAmt", 0)) + float(position.get("cfBuyAmt", 0))
+        sell_amt = float(position.get("sellAmt", 0)) + float(position.get("cfSellAmt", 0))
+
+        # Calculate average price based on net position direction
+        if net_qty > 0 and buy_qty > 0:
+            avg_price = round(buy_amt / buy_qty, 2)
+        elif net_qty < 0 and sell_qty > 0:
+            avg_price = round(sell_amt / sell_qty, 2)
+        else:
+            avg_price = 0.0
+
+        # Realized PnL = sellAmt - buyAmt (for squared-off qty)
+        realized_pnl = round(sell_amt - buy_amt, 2)
+
         transformed_position = {
             "symbol": position.get("trdSym", ""),
             "exchange": position.get("exSeg", ""),
             "product": position.get("prod", ""),
-            "quantity": (int(position.get("flBuyQty", 0)) - int(position.get("flSellQty", 0)))
-            + (int(position.get("cfBuyQty", 0)) - int(position.get("cfSellQty", 0))),
-            "average_price": position.get("avgnetprice", 0.0),
+            "quantity": net_qty,
+            "average_price": avg_price,
+            "pnl": realized_pnl,
         }
-        buy_qty = float(position.get("flBuyQty", 0))
-        sell_qty = float(position.get("flSellQty", 0))
-
-        if transformed_position["quantity"] > 0 and buy_qty > 0:
-            transformed_position["average_price"] = round(
-                float(position.get("buyAmt", 0)) / buy_qty, 2
-            )
-        elif transformed_position["quantity"] < 0 and sell_qty > 0:
-            transformed_position["average_price"] = round(
-                float(position.get("sellAmt", 0)) / sell_qty, 2
-            )
-        elif transformed_position["quantity"] != 0:
-            transformed_position["average_price"] = 0.0
 
         transformed_data.append(transformed_position)
 

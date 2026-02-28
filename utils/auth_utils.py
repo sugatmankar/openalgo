@@ -298,8 +298,20 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
     Handles common tasks after successful authentication.
     - Sets session parameters
     - Stores auth token in the database
+    - If a pending_account_id exists in session (multi-account flow),
+      stores the token under a per-account key and marks the account authenticated.
     - Initiates asynchronous master contract download (smart: skips if downloaded after 8 AM IST)
     """
+    # Check if this is a multi-account authentication
+    pending_account_id = session.pop("pending_account_id", None)
+    session.pop("pending_account_broker", None)  # clean up
+
+    # Determine the auth DB key – per-account or legacy
+    if pending_account_id:
+        auth_db_key = f"{user_session_key}__acct_{pending_account_id}"
+    else:
+        auth_db_key = user_session_key
+
     # Set session parameters
     session["logged_in"] = True
     session["AUTH_TOKEN"] = auth_token
@@ -310,6 +322,10 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
     session["user_session_key"] = user_session_key
     session["broker"] = broker
 
+    # If multi-account, track the active account
+    if pending_account_id:
+        session["active_account_id"] = pending_account_id
+
     # Set session expiry and login time
     app.config["PERMANENT_SESSION_LIFETIME"] = get_session_expiry_time()
     session.permanent = True
@@ -317,10 +333,23 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
 
     logger.info(f"User {user_session_key} logged in successfully with broker {broker}")
 
-    # Store auth token in database
+    # Store auth token in database (using per-account key if multi-account)
     inserted_id = upsert_auth(
-        user_session_key, auth_token, broker, feed_token=feed_token, user_id=user_id
+        auth_db_key, auth_token, broker, feed_token=feed_token, user_id=user_id
     )
+
+    # Also store under the legacy key so existing code (dashboard etc.) works
+    if pending_account_id:
+        upsert_auth(
+            user_session_key, auth_token, broker, feed_token=feed_token, user_id=user_id
+        )
+        # Mark the broker account as authenticated
+        try:
+            from database.broker_account_db import mark_account_authenticated
+            mark_account_authenticated(pending_account_id, user_session_key, True)
+        except Exception as e:
+            logger.warning(f"Could not mark account {pending_account_id} as authenticated: {e}")
+
     if inserted_id:
         logger.info(f"Database record upserted with ID: {inserted_id}")
         # Initialize master contract status for this broker
@@ -342,14 +371,18 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
 
         # Return JSON for AJAX requests (React), redirect for OAuth callbacks
         if is_ajax_request():
+            redirect_url = "/broker-accounts" if pending_account_id else "/dashboard"
             return jsonify(
                 {
                     "status": "success",
                     "message": "Authentication successful",
-                    "redirect": "/dashboard",
+                    "redirect": redirect_url,
                 }
             ), 200
         else:
+            # For OAuth callbacks (non-AJAX), redirect appropriately
+            if pending_account_id:
+                return redirect("/broker-accounts")
             return redirect(url_for("dashboard_bp.dashboard"))
     else:
         logger.error(f"Failed to upsert auth token for user {user_session_key}")

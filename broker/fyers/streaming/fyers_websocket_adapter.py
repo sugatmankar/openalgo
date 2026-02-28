@@ -87,6 +87,26 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             # self.logger.info(f"Initializing Fyers adapter for user: {user_id}")
 
+            # Ensure BROKER_API_KEY is set (may be lost after restart)
+            # Restore from the active broker account's stored credentials
+            if not os.getenv("BROKER_API_KEY"):
+                try:
+                    from database.broker_account_db import get_broker_accounts
+                    accounts = get_broker_accounts(user_id)
+                    # Find the active/authenticated fyers account
+                    for acct in accounts:
+                        if acct.get("broker") == "fyers" and acct.get("is_authenticated"):
+                            from database.broker_account_db import get_broker_account
+                            full_acct = get_broker_account(acct["id"], user_id)
+                            if full_acct and full_acct.get("broker_api_key"):
+                                os.environ["BROKER_API_KEY"] = full_acct["broker_api_key"]
+                                if full_acct.get("broker_api_secret"):
+                                    os.environ["BROKER_API_SECRET"] = full_acct["broker_api_secret"]
+                                self.logger.info("Restored BROKER_API_KEY from broker account DB")
+                            break
+                except Exception as e:
+                    self.logger.warning(f"Could not restore broker credentials from DB: {e}")
+
             # Get access token from auth_data or database
             if auth_data and "access_token" in auth_data:
                 self.access_token = auth_data["access_token"]
