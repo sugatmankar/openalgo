@@ -156,6 +156,40 @@ def revoke_user_tokens(revoke_db_tokens=True):
             logger.exception(f"Error revoking tokens during auto-expiry for user {username}: {e}")
 
 
+def _ensure_account_env():
+    """Re-hydrate BROKER_API_KEY and related env vars from the active broker account.
+
+    After a server restart the session is restored from storage but
+    ``_set_account_env()`` (which copies account credentials into
+    ``os.environ``) is never re-executed.  Broker modules like
+    ``broker/fyers/api/funds.py`` rely on ``os.getenv("BROKER_API_KEY")``,
+    so we must restore the env vars before any broker call.
+
+    This function is cheap: it short-circuits when the env is already set.
+    """
+    active_id = session.get("active_account_id")
+    if not active_id:
+        return  # no multi-account context
+
+    # Already hydrated – nothing to do
+    if os.getenv("BROKER_API_KEY"):
+        return
+
+    try:
+        from database.broker_account_db import get_broker_account
+        from blueprints.broker_accounts import _set_account_env
+
+        account = get_broker_account(active_id, session["user"])
+        if account:
+            _set_account_env(account)
+            logger.debug(
+                f"Re-hydrated env vars for active account {active_id} "
+                f"({account.get('broker')})"
+            )
+    except Exception as exc:
+        logger.warning(f"Failed to re-hydrate account env: {exc}")
+
+
 def check_session_validity(f):
     """Decorator to check session validity before executing route"""
 
@@ -190,6 +224,10 @@ def check_session_validity(f):
 
             logger.info("Invalid session detected - redirecting to login")
             return redirect(url_for("auth.login"))
+
+        # Re-hydrate broker env vars if the server restarted mid-session
+        _ensure_account_env()
+
         logger.debug("Session validated successfully")
         return f(*args, **kwargs)
 

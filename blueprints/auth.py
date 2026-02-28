@@ -56,12 +56,31 @@ def get_csrf_token():
 
 @auth_bp.route("/broker-config", methods=["GET"])
 def get_broker_config():
-    """Return broker configuration for React SPA."""
+    """Return broker configuration for React SPA.
+
+    Legacy endpoint kept for backward compatibility with old compiled frontends.
+    In multi-account mode, broker config comes from individual broker accounts
+    rather than global environment variables.
+    """
     if "user" not in session:
         return jsonify({"status": "error", "message": "Not authenticated"}), 401
 
     BROKER_API_KEY = os.getenv("BROKER_API_KEY")
     REDIRECT_URL = os.getenv("REDIRECT_URL")
+
+    # In multi-account mode these env vars may not be set globally.
+    # Return a helpful message directing users to Broker Accounts.
+    if not REDIRECT_URL:
+        broker = session.get("broker")
+        return jsonify(
+            {
+                "status": "success" if broker else "error",
+                "broker_name": broker or None,
+                "broker_api_key": BROKER_API_KEY or "",
+                "redirect_url": REDIRECT_URL or "",
+                "message": "Use Broker Accounts to manage broker connections" if not broker else None,
+            }
+        ), 200 if broker else 400
 
     # Extract broker name from redirect URL
     match = re.search(r"/([^/]+)/callback$", REDIRECT_URL)
