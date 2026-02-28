@@ -74,6 +74,12 @@ def get_funds_with_auth(
         # Get funds data using broker's implementation
         funds = broker_module.get_margin_data(auth_token)
 
+        # Broker modules return {} on API failure (auth expired, timeout, etc.)
+        # Don't return success with empty data - callers need to know this failed
+        if not funds:
+            logger.warning("Broker returned empty margin data (possible auth expiry or API failure)")
+            return False, {"status": "error", "message": "No margin data available from broker"}, 502
+
         return True, {"status": "success", "data": funds}, 200
     except Exception as e:
         logger.error(f"Error in broker_module.get_margin_data: {e}")
