@@ -25,7 +25,7 @@ def iv_data():
     try:
         broker = session.get("broker")
         if not broker:
-            return jsonify({"status": "error", "message": "Broker not set in session"}), 400
+            return jsonify({"status": "error", "message": "No broker account connected. Please set up and activate a broker account."}), 400
 
         login_username = session["user"]
         auth_token = get_auth_token(login_username)

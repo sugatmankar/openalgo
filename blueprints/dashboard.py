@@ -24,8 +24,8 @@ def dashboard():
 
     broker = session.get("broker")
     if not broker:
-        logger.error("Broker not set in session")
-        return "Broker not set in session", 400
+        logger.error("No broker account connected in session")
+        return "No broker account connected. Please go to Broker Accounts to set up and activate a broker account.", 400
 
     # Check if in analyze mode and route accordingly
     if get_analyze_mode():

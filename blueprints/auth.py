@@ -662,7 +662,7 @@ def get_dashboard_data():
     broker = session.get("broker")
 
     if not broker:
-        return jsonify({"status": "error", "message": "Broker not set in session"}), 400
+        return jsonify({"status": "error", "message": "No broker account connected. Please go to Broker Accounts to set up and activate a broker account."}), 400
 
     try:
         from database.auth_db import get_api_key_for_tradingview, get_auth_token

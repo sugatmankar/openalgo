@@ -293,17 +293,9 @@ def load_and_check_env_variables():
         print("Example: WEBSOCKET_PORT='8765'")
         sys.exit(1)
 
-    # REDIRECT_URL and broker validation are now optional.
-    # With the multi-account broker system, broker credentials and OAuth
-    # callbacks are managed per-account in the database.
-    # We still warn if not configured, but don't block startup.
-    redirect_url = os.getenv("REDIRECT_URL", "")
-    default_value = "http://127.0.0.1:5000/<broker>/callback"
-
-    if not redirect_url or redirect_url == default_value or "<broker>" in redirect_url:
-        print("\n⚠️  REDIRECT_URL is not configured for a specific broker.")
-        print("   You can configure brokers via the Broker Accounts page in the UI.")
-        print("   Or set REDIRECT_URL in .env for legacy single-broker mode.\n")
+    # REDIRECT_URL is no longer required in .env.
+    # With the multi-account broker system, redirect URLs are managed
+    # per-account in the database via the Broker Accounts page.
 
     # Validate VALID_BROKERS if present
     valid_brokers_str = os.getenv("VALID_BROKERS", "")

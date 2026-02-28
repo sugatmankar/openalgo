@@ -1,7 +1,8 @@
-import { BarChart3, BookOpen, FileText, MessageCircle, Search, Zap } from 'lucide-react'
+import { AlertCircle, BarChart3, BookOpen, Building2, FileText, MessageCircle, Search, Zap } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { onModeChange } from '@/stores/themeStore'
@@ -66,6 +67,7 @@ export default function Dashboard() {
     status: 'pending',
   })
   const [isAuthenticated, setIsAuthenticated] = useState(true) // Assume authenticated initially
+  const [noBrokerConnected, setNoBrokerConnected] = useState(false) // No broker account set up
 
   // Fetch dashboard funds data
   const fetchFundsData = useCallback(async () => {
@@ -85,6 +87,16 @@ export default function Dashboard() {
 
       if (data.status === 'success' && data.data) {
         setMarginData(data.data)
+        setError(null)
+        setNoBrokerConnected(false)
+      } else if (
+        response.status === 400 &&
+        data.message &&
+        (data.message.toLowerCase().includes('broker not set') ||
+          data.message.toLowerCase().includes('broker not connected'))
+      ) {
+        // No broker connected - show setup prompt instead of error
+        setNoBrokerConnected(true)
         setError(null)
       } else {
         setError(data.message || 'Failed to fetch margin data')
@@ -265,6 +277,102 @@ export default function Dashboard() {
         <Link to="/login" className="text-primary hover:underline">
           Go to Login
         </Link>
+      </div>
+    )
+  }
+
+  // If no broker account is connected, show setup prompt
+  if (noBrokerConnected) {
+    return (
+      <div className="space-y-6 md:space-y-12">
+        {/* Dashboard Header */}
+        <div className="flex flex-col lg:flex-row lg:items-start gap-4">
+          <div className="flex-1">
+            <h1 className="text-2xl md:text-3xl font-bold">Trading Dashboard</h1>
+            <p className="text-muted-foreground mt-1 md:mt-2 text-sm md:text-base">
+              Overview of your trading account and market positions
+            </p>
+          </div>
+        </div>
+
+        {/* No Broker Connected Card */}
+        <Card className="border-yellow-500/50 bg-yellow-500/5">
+          <CardContent className="pt-8 pb-8">
+            <div className="flex flex-col items-center text-center space-y-4">
+              <div className="p-4 rounded-full bg-yellow-500/10">
+                <AlertCircle className="h-10 w-10 text-yellow-600 dark:text-yellow-400" />
+              </div>
+              <div className="space-y-2">
+                <h2 className="text-xl font-semibold">No Broker Account Connected</h2>
+                <p className="text-muted-foreground max-w-md">
+                  To view your trading data, you need to set up a broker account and authenticate it. 
+                  Add your broker credentials, then set the account as active.
+                </p>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                <Link to="/broker-accounts">
+                  <Button className="gap-2">
+                    <Building2 className="h-4 w-4" />
+                    Setup Broker Account
+                  </Button>
+                </Link>
+              </div>
+              <div className="text-xs text-muted-foreground pt-2 space-y-1">
+                <p><strong>Step 1:</strong> Go to Broker Accounts and add your broker credentials</p>
+                <p><strong>Step 2:</strong> Authenticate the account with your broker</p>
+                <p><strong>Step 3:</strong> Set the account as active to start trading</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Quick Access Tools - show even without broker */}
+        <div>
+          <h2 className="text-xl md:text-2xl font-semibold mb-4 md:mb-6">Quick Access</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-5">
+            {quickAccessCards.map((card) => {
+              const cardClasses = cn(
+                'block rounded-lg border transition-all duration-300 hover:shadow-lg',
+                `bg-gradient-to-br ${card.gradient}`,
+                card.borderColor
+              )
+
+              const cardContent = (
+                <div className="p-4 md:p-5">
+                  <div className="flex items-start gap-3 md:gap-4">
+                    <div className={cn('p-2.5 md:p-3 rounded-lg flex-shrink-0', card.iconBg)}>
+                      <card.icon className={cn('h-5 w-5 md:h-6 md:w-6', card.iconColor)} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h3 className="font-semibold mb-1 text-base md:text-lg">{card.label}</h3>
+                      <p className="text-sm text-muted-foreground">{card.description}</p>
+                    </div>
+                  </div>
+                </div>
+              )
+
+              if (card.external) {
+                return (
+                  <a
+                    key={card.href}
+                    href={card.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={cardClasses}
+                  >
+                    {cardContent}
+                  </a>
+                )
+              }
+
+              return (
+                <Link key={card.href} to={card.href} className={cardClasses}>
+                  {cardContent}
+                </Link>
+              )
+            })}
+          </div>
+        </div>
       </div>
     )
   }

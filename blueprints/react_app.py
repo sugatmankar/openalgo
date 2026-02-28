@@ -97,7 +97,7 @@ def react_rate_limited():
     return serve_react_app()
 
 
-# Broker selection - serve React at /broker (alias for /auth/broker)
+# Broker selection - redirect to broker-accounts (legacy /broker page removed)
 @react_bp.route("/broker")
 def react_broker():
     return serve_react_app()

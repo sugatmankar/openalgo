@@ -28,15 +28,41 @@ def _get_valid_brokers():
 @broker_accounts_bp.route("", methods=["GET"])
 @check_session_validity
 def list_accounts():
-    """List all broker accounts for the logged-in user."""
+    """List all broker accounts for the logged-in user.
+    
+    Validates connection status against actual auth tokens in the database.
+    Accounts that claim to be 'connected' but have no valid auth token
+    are downgraded to 'disconnected'.
+    """
     if "user" not in session:
         return jsonify({"status": "error", "message": "Not authenticated"}), 401
 
     try:
-        from database.broker_account_db import list_broker_accounts
+        from database.auth_db import get_auth_token
+        from database.broker_account_db import list_broker_accounts, update_connection_status
 
         broker_filter = request.args.get("broker")
         accounts = list_broker_accounts(session["user"], broker=broker_filter)
+
+        active_account_id = session.get("active_account_id")
+
+        # Validate connection status for each account
+        for account in accounts:
+            if account.get("connection_status") == "connected":
+                # Verify the auth token actually exists for this account
+                auth_key = f"{session['user']}__acct_{account['id']}"
+                auth_token = get_auth_token(auth_key)
+                if not auth_token:
+                    # Token has expired or been cleared - mark as disconnected
+                    account["connection_status"] = "disconnected"
+                    account["is_authenticated"] = False
+                    update_connection_status(
+                        account["id"], session["user"], "disconnected"
+                    )
+
+            # Mark which account is currently active in session
+            account["is_session_active"] = (account["id"] == active_account_id)
+
         return jsonify({"status": "success", "data": accounts})
     except Exception as e:
         logger.exception(f"Error listing broker accounts: {e}")
@@ -342,7 +368,14 @@ def authenticate_account(account_id):
 @broker_accounts_bp.route("/<int:account_id>/set-active", methods=["POST"])
 @check_session_validity
 def set_active_account(account_id):
-    """Set a broker account as the currently active one in the session."""
+    """Set a broker account as the currently active one in the session.
+
+    Flow:
+    1. If the broker supports auto-auth (TOTP), always re-authenticate to
+       get a fresh token — saved tokens may be expired.
+    2. Otherwise fall back to the previously saved auth token.
+    3. Only fail if neither approach works.
+    """
     if "user" not in session:
         return jsonify({"status": "error", "message": "Not authenticated"}), 401
 
@@ -358,39 +391,71 @@ def set_active_account(account_id):
                 {"status": "error", "message": "Account is not authenticated. Please authenticate first."}
             ), 400
 
-        # Load auth token for this account
-        auth_key = f"{session['user']}__acct_{account_id}"
+        broker = account["broker"]
+        user = session["user"]
+        auth_key = f"{user}__acct_{account_id}"
+
         from database.auth_db import get_auth_token, get_feed_token
 
-        auth_token = get_auth_token(auth_key)
+        auth_token = None
+        feed_token = None
+        reauthed = False
+
+        # If auto-auth is supported, always get a fresh token
+        can_auto = _broker_has_auto_auth_support(broker, account)
+        if can_auto:
+            logger.info(
+                f"Auto-reauthenticating account {account_id} ({broker}) on activation..."
+            )
+            result = _auto_authenticate_totp(account_id, user, broker, account)
+            if result.get("status") == "success":
+                auth_token = get_auth_token(auth_key)
+                feed_token = get_feed_token(auth_key)
+                reauthed = True
+                logger.info(f"Auto-reauth successful for account {account_id} ({broker})")
+            else:
+                logger.warning(
+                    f"Auto-reauth failed for account {account_id} ({broker}): "
+                    f"{result.get('message')}. Falling back to saved token."
+                )
+
+        # Fall back to saved token if auto-auth wasn't attempted or failed
+        if not auth_token:
+            auth_token = get_auth_token(auth_key)
+            feed_token = get_feed_token(auth_key) if auth_token else None
+
         if not auth_token:
             return jsonify(
-                {"status": "error", "message": "No valid auth token for this account. Please re-authenticate."}
+                {"status": "error", "message": "No valid auth token and auto-reauth not available. Please re-authenticate."}
             ), 400
 
         # Set session context
         session["active_account_id"] = account_id
-        session["broker"] = account["broker"]
+        session["broker"] = broker
         session["AUTH_TOKEN"] = auth_token
         session["logged_in"] = True
 
-        feed_token = get_feed_token(auth_key)
         if feed_token:
             session["FEED_TOKEN"] = feed_token
 
         # Set account credentials in env for broker operations
         _set_account_env(account)
 
+        msg = f"Switched to account '{account['account_name']}'"
+        if reauthed:
+            msg += " (re-authenticated)"
+
         logger.info(
-            f"User {session['user']} activated broker account '{account['account_name']}' ({account['broker']})"
+            f"User {user} activated broker account '{account['account_name']}' ({broker})"
+            + (" [auto-reauth]" if reauthed else "")
         )
 
         return jsonify({
             "status": "success",
-            "message": f"Switched to account '{account['account_name']}'",
+            "message": msg,
             "data": {
                 "account_id": account_id,
-                "broker": account["broker"],
+                "broker": broker,
                 "account_name": account["account_name"],
             },
         })

@@ -167,8 +167,8 @@ def orderbook():
 
     broker = session.get("broker")
     if not broker:
-        logger.error("Broker not set in session")
-        return "Broker not set in session", 400
+        logger.error("No broker account connected. Please set up and activate a broker account.")
+        return "No broker account connected. Please set up and activate a broker account.", 400
 
     # Check if in analyze mode and route accordingly
     if get_analyze_mode():
@@ -209,8 +209,8 @@ def tradebook():
 
     broker = session.get("broker")
     if not broker:
-        logger.error("Broker not set in session")
-        return "Broker not set in session", 400
+        logger.error("No broker account connected. Please set up and activate a broker account.")
+        return "No broker account connected. Please set up and activate a broker account.", 400
 
     # Check if in analyze mode and route accordingly
     if get_analyze_mode():
@@ -249,8 +249,8 @@ def positions():
 
     broker = session.get("broker")
     if not broker:
-        logger.error("Broker not set in session")
-        return "Broker not set in session", 400
+        logger.error("No broker account connected. Please set up and activate a broker account.")
+        return "No broker account connected. Please set up and activate a broker account.", 400
 
     # Check if in analyze mode and route accordingly
     if get_analyze_mode():
@@ -289,8 +289,8 @@ def holdings():
 
     broker = session.get("broker")
     if not broker:
-        logger.error("Broker not set in session")
-        return "Broker not set in session", 400
+        logger.error("No broker account connected. Please set up and activate a broker account.")
+        return "No broker account connected. Please set up and activate a broker account.", 400
 
     # Check if in analyze mode and route accordingly
     if get_analyze_mode():
@@ -350,8 +350,8 @@ def export_orderbook():
         else:
             # Use live broker
             if not broker:
-                logger.error("Broker not set in session")
-                return "Broker not set in session", 400
+                logger.error("No broker account connected. Please set up and activate a broker account.")
+                return "No broker account connected. Please set up and activate a broker account.", 400
 
             api_funcs = dynamic_import(broker, "api.order_api", ["get_order_book"])
             mapping_funcs = dynamic_import(
@@ -410,8 +410,8 @@ def export_tradebook():
         else:
             # Use live broker
             if not broker:
-                logger.error("Broker not set in session")
-                return "Broker not set in session", 400
+                logger.error("No broker account connected. Please set up and activate a broker account.")
+                return "No broker account connected. Please set up and activate a broker account.", 400
 
             api_funcs = dynamic_import(broker, "api.order_api", ["get_trade_book"])
             mapping_funcs = dynamic_import(
@@ -470,8 +470,8 @@ def export_positions():
         else:
             # Use live broker
             if not broker:
-                logger.error("Broker not set in session")
-                return "Broker not set in session", 400
+                logger.error("No broker account connected. Please set up and activate a broker account.")
+                return "No broker account connected. Please set up and activate a broker account.", 400
 
             api_funcs = dynamic_import(broker, "api.order_api", ["get_positions"])
             mapping_funcs = dynamic_import(

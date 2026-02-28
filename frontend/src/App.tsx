@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { Providers } from '@/app/providers'
 import { AuthSync } from '@/components/auth/AuthSync'
 import { FullWidthLayout } from '@/components/layout/FullWidthLayout'
@@ -19,7 +19,6 @@ const RateLimited = lazy(() => import('@/pages/RateLimited'))
 const NotFound = lazy(() => import('@/pages/NotFound'))
 
 // Broker auth
-const BrokerSelect = lazy(() => import('@/pages/BrokerSelect'))
 const BrokerTOTP = lazy(() => import('@/pages/BrokerTOTP'))
 const BrokerAccounts = lazy(() => import('@/pages/BrokerAccounts'))
 
@@ -126,7 +125,7 @@ function App() {
               <Route path="/rate-limited" element={<RateLimited />} />
 
               {/* Broker auth routes */}
-              <Route path="/broker" element={<BrokerSelect />} />
+              <Route path="/broker" element={<Navigate to="/broker-accounts" replace />} />
               <Route path="/broker/:broker/totp" element={<BrokerTOTP />} />
               {/* Dynamic broker TOTP routes for all supported brokers */}
               <Route path="/:broker/auth" element={<BrokerTOTP />} />

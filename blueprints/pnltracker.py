@@ -212,8 +212,8 @@ def get_pnl_data():
     try:
         broker = session.get("broker")
         if not broker:
-            logger.error("Broker not set in session")
-            return jsonify({"status": "error", "message": "Broker not set in session"}), 400
+            logger.error("No broker account connected. Please set up and activate a broker account.")
+            return jsonify({"status": "error", "message": "No broker account connected. Please set up and activate a broker account."}), 400
 
         # Get auth token from session - same as orders.py
         login_username = session["user"]

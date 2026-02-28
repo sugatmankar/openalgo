@@ -408,7 +408,7 @@ export default function BrokerTOTP() {
               variant="ghost"
               size="sm"
               className="absolute left-4 top-4"
-              onClick={() => navigate('/broker')}
+              onClick={() => navigate('/broker-accounts')}
             >
               <ArrowLeft className="h-4 w-4 mr-2" />
               Back
@@ -497,11 +497,11 @@ export default function BrokerTOTP() {
               <p>Your credentials are securely transmitted and encrypted.</p>
               <div className="flex items-center justify-center gap-4">
                 <Link
-                  to="/broker"
+                  to="/broker-accounts"
                   className="text-primary hover:underline inline-flex items-center gap-1"
                 >
                   <ArrowLeft className="h-3 w-3" />
-                  Back to Broker Selection
+                  Back to Broker Accounts
                 </Link>
                 <a
                   href="https://docs.openalgo.in"

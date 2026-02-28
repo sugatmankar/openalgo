@@ -23,6 +23,7 @@ export interface BrokerAccount {
   last_connected_at: string | null
   is_active: boolean
   is_authenticated: boolean
+  is_session_active: boolean  // Whether this account is the currently active one in the session
   created_at: string | null
   updated_at: string | null
 }

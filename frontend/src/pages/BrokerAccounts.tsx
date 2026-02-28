@@ -22,6 +22,7 @@ import {
   brokerAccountsApi,
 } from '@/api/broker-accounts'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { useAuthStore } from '@/stores/authStore'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -172,6 +173,7 @@ export default function BrokerAccounts() {
   const [deleteAccountId, setDeleteAccountId] = useState<number | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [authenticatingId, setAuthenticatingId] = useState<number | null>(null)
+  const [activatingId, setActivatingId] = useState<number | null>(null)
 
   // Edit dialog state
   const [showEditDialog, setShowEditDialog] = useState(false)
@@ -312,9 +314,17 @@ export default function BrokerAccounts() {
   }
 
   const handleSetActive = async (account: BrokerAccount) => {
+    setActivatingId(account.id)
     try {
-      await brokerAccountsApi.setActive(account.id)
+      const result = await brokerAccountsApi.setActive(account.id)
       setActiveAccountId(account.id)
+
+      // Update the broker name in the navbar immediately
+      const { user, setUser } = useAuthStore.getState()
+      if (user) {
+        setUser({ ...user, broker: result.broker || account.broker })
+      }
+
       showToast.success(
         `Switched to "${account.account_name}" (${account.broker})`
       )
@@ -323,6 +333,8 @@ export default function BrokerAccounts() {
       const errData = (e as { response?: { data?: { message?: string } } })
         .response?.data
       showToast.error(errData?.message || 'Failed to switch account')
+    } finally {
+      setActivatingId(null)
     }
   }
 
@@ -383,10 +395,21 @@ export default function BrokerAccounts() {
 
   const getConnectionBadge = (account: BrokerAccount) => {
     if (account.connection_status === 'connected') {
+      const isActive = account.is_session_active || activeAccountId === account.id
+      if (isActive) {
+        // Connected AND currently the active account
+        return (
+          <Badge variant="default" className="bg-green-600 hover:bg-green-700">
+            {getConnectionIcon('connected')}
+            Active
+          </Badge>
+        )
+      }
+      // Connected but not the active account
       return (
-        <Badge variant="default" className="bg-green-600 hover:bg-green-700">
+        <Badge variant="outline" className="border-green-600 text-green-600 dark:text-green-400">
           {getConnectionIcon('connected')}
-          Connected
+          Authenticated
         </Badge>
       )
     }
@@ -490,11 +513,6 @@ export default function BrokerAccounts() {
                         Auto-Auth
                       </Badge>
                     )}
-                    {activeAccountId === account.id && (
-                      <Badge variant="outline" className="border-primary text-primary">
-                        Active
-                      </Badge>
-                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     {account.is_authenticated &&
@@ -503,9 +521,19 @@ export default function BrokerAccounts() {
                           size="sm"
                           variant="outline"
                           onClick={() => handleSetActive(account)}
+                          disabled={activatingId === account.id}
                         >
-                          <Power className="h-4 w-4 mr-1" />
-                          Set Active
+                          {activatingId === account.id ? (
+                            <>
+                              <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                              Activating...
+                            </>
+                          ) : (
+                            <>
+                              <Power className="h-4 w-4 mr-1" />
+                              Set Active
+                            </>
+                          )}
                         </Button>
                       )}
                     <Button
