@@ -19,6 +19,7 @@ if platform.system() == "Windows":
 _websocket_server_started = False
 _websocket_proxy_instance = None
 _websocket_thread = None
+_websocket_event_loop = None  # The asyncio event loop running in the WS thread
 
 logger = get_logger(__name__)
 
@@ -138,11 +139,12 @@ def start_websocket_server():
 
     def run_websocket_server():
         """Run the WebSocket server in an event loop"""
-        global _websocket_proxy_instance
+        global _websocket_proxy_instance, _websocket_event_loop
         loop = None
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
+            _websocket_event_loop = loop
 
             # Import here to avoid circular imports
             import os
@@ -231,3 +233,40 @@ def start_websocket_proxy(app):
             logger.debug("WebSocket server already running, skipping initialization")
     else:
         logger.debug("Skipping WebSocket server in parent/monitor process")
+
+
+def teardown_broker_adapter(user_id: str, reason: str = "broker switch") -> bool:
+    """
+    Tear down a user's broker WebSocket adapter from the Flask side.
+
+    This is called during broker switches (e.g. set_active_account) to
+    proactively close the old broker's WebSocket connection, unsubscribe
+    all symbols, and clean up adapter mappings.  The next subscribe or
+    authenticate from a WebSocket client will create a fresh adapter for
+    the new broker.
+
+    Thread-safe: the teardown method only manipulates in-memory dicts
+    (protected by the GIL) and makes synchronous adapter API calls.
+
+    Args:
+        user_id: The username/user_id whose adapter should be torn down.
+        reason: Human-readable reason for the teardown (for logging).
+
+    Returns:
+        True if an adapter was torn down, False if none existed.
+    """
+    proxy = _websocket_proxy_instance
+    if not proxy:
+        logger.debug("No WebSocket proxy instance — skipping adapter teardown")
+        return False
+
+    if user_id not in proxy.broker_adapters:
+        logger.debug(f"No adapter for user {user_id} — nothing to tear down")
+        return False
+
+    try:
+        proxy.teardown_user_adapter(user_id, reason=reason)
+        return True
+    except Exception as e:
+        logger.warning(f"Error tearing down adapter for {user_id}: {e}")
+        return False

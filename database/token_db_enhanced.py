@@ -4,6 +4,7 @@ Optimized for zero-config deployment with configurable session reset time (SESSI
 """
 
 import re
+import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -117,6 +118,12 @@ class BrokerSymbolCache:
         self.active_broker: str | None = None
         self.cache_loaded: bool = False
 
+        # Target broker: set when the user switches brokers so that a stale
+        # background download for the *previous* broker cannot overwrite the
+        # cache with outdated data.  See broker-switch race-condition fix.
+        self._target_broker: str | None = None
+        self._load_lock = threading.Lock()
+
         # Primary storage - all symbols in memory
         self.symbols: dict[str, SymbolData] = {}
 
@@ -141,13 +148,38 @@ class BrokerSymbolCache:
 
         logger.debug("BrokerSymbolCache initialized")
 
+    def set_target_broker(self, broker: str):
+        """Declare which broker the user *wants* active.
+
+        Called from set_active_account() before triggering a master-contract
+        download.  load_all_symbols() checks this value before writing to the
+        cache; if a background download for a *different* (stale) broker tries
+        to update the cache later, it will be skipped.
+        """
+        self._target_broker = broker
+        logger.info(f"Target broker set to '{broker}'")
+
     def load_all_symbols(self, broker: str) -> bool:
         """
         Load all symbols for the active broker into memory
         This is called once after master contract download
         """
+        with self._load_lock:
+            return self._load_all_symbols_locked(broker)
+
+    def _load_all_symbols_locked(self, broker: str) -> bool:
+        """Inner implementation of load_all_symbols, called under _load_lock."""
         try:
             from database.symbol import SymToken
+
+            # Guard: if a broker switch was requested after this download
+            # started, skip the cache update so we don't overwrite with stale data.
+            if self._target_broker and self._target_broker != broker:
+                logger.warning(
+                    f"Skipping cache load for '{broker}' — target broker "
+                    f"changed to '{self._target_broker}' (broker-switch race avoided)"
+                )
+                return False
 
             start_time = time.time()
             logger.debug(f"Loading all symbols for broker: {broker}")
@@ -208,6 +240,9 @@ class BrokerSymbolCache:
             # Update cache metadata
             self.active_broker = broker
             self.cache_loaded = True
+            # Clear target once we've loaded the broker we were asked for.
+            if self._target_broker == broker:
+                self._target_broker = None
             self.stats.total_symbols = len(symbols)
             self.stats.cache_loads += 1
             self.stats.last_loaded = datetime.now(pytz.timezone("Asia/Kolkata"))
@@ -616,6 +651,20 @@ def get_cache() -> BrokerSymbolCache:
     return _cache_instance
 
 
+def _is_broker_transition_in_progress() -> bool:
+    """Return True when a broker switch has been requested but the new cache isn't ready yet.
+
+    During a transition the symtoken table (and the in-memory cache) may still
+    hold data for the *previous* broker.  Returning True tells the public lookup
+    functions to short-circuit and return None rather than serving stale data
+    (e.g. returning Flattrade's "Nifty 50" when Fyers expects "NSE:NIFTY50-INDEX").
+    """
+    cache = get_cache()
+    if cache._target_broker and cache._target_broker != cache.active_broker:
+        return True
+    return False
+
+
 # Public API - Drop-in replacement for existing token_db functions
 def get_token(symbol: str, exchange: str) -> str | None:
     """
@@ -623,6 +672,10 @@ def get_token(symbol: str, exchange: str) -> str | None:
     First checks cache, falls back to database if needed
     """
     cache = get_cache()
+
+    # Block lookups during broker transition to prevent stale data
+    if _is_broker_transition_in_progress():
+        return None
 
     # Check if cache is loaded and valid
     if cache.cache_loaded and cache.is_cache_valid():
@@ -641,6 +694,9 @@ def get_symbol(token: str, exchange: str) -> str | None:
     """
     cache = get_cache()
 
+    if _is_broker_transition_in_progress():
+        return None
+
     if cache.cache_loaded and cache.is_cache_valid():
         result = cache.get_symbol(token, exchange)
         if result is not None:
@@ -655,6 +711,9 @@ def get_br_symbol(symbol: str, exchange: str) -> str | None:
     Get broker symbol for a given symbol and exchange
     """
     cache = get_cache()
+
+    if _is_broker_transition_in_progress():
+        return None
 
     if cache.cache_loaded and cache.is_cache_valid():
         result = cache.get_br_symbol(symbol, exchange)
@@ -671,6 +730,9 @@ def get_oa_symbol(brsymbol: str, exchange: str) -> str | None:
     """
     cache = get_cache()
 
+    if _is_broker_transition_in_progress():
+        return None
+
     if cache.cache_loaded and cache.is_cache_valid():
         result = cache.get_oa_symbol(brsymbol, exchange)
         if result is not None:
@@ -685,6 +747,9 @@ def get_brexchange(symbol: str, exchange: str) -> str | None:
     Get broker exchange for a given symbol and exchange
     """
     cache = get_cache()
+
+    if _is_broker_transition_in_progress():
+        return None
 
     if cache.cache_loaded and cache.is_cache_valid():
         result = cache.get_brexchange(symbol, exchange)
@@ -702,6 +767,9 @@ def get_symbol_info(symbol: str, exchange: str) -> SymbolData | None:
     First checks cache, falls back to database if needed
     """
     cache = get_cache()
+
+    if _is_broker_transition_in_progress():
+        return None
 
     if cache.cache_loaded and cache.is_cache_valid():
         result = cache.get_symbol_info(symbol, exchange)

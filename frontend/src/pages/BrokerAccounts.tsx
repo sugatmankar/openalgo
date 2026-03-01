@@ -60,6 +60,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { showToast } from '@/utils/toast'
+import { MarketDataManager } from '@/lib/MarketDataManager'
+import { queryClient } from '@/app/providers'
 
 // XTS brokers that need market data credentials
 const XTS_BROKERS = new Set([
@@ -324,6 +326,12 @@ export default function BrokerAccounts() {
       if (user) {
         setUser({ ...user, broker: result.broker || account.broker })
       }
+
+      // Reset MarketDataManager to tear down old WS connections
+      MarketDataManager.resetInstance()
+
+      // Invalidate all cached queries so pages fetch fresh data
+      queryClient.invalidateQueries()
 
       showToast.success(
         `Switched to "${account.account_name}" (${account.broker})`

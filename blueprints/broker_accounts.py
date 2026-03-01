@@ -441,6 +441,21 @@ def set_active_account(account_id):
         # Set account credentials in env for broker operations
         _set_account_env(account)
 
+        # Set target broker BEFORE any data operations
+        from database.token_db_enhanced import BrokerSymbolCache
+        BrokerSymbolCache.get_instance().set_target_broker(broker)
+
+        # Clear stale strikes cache from previous broker
+        from services.option_symbol_service import clear_strikes_cache
+        clear_strikes_cache()
+
+        # Tear down old WebSocket adapter so new broker adapter is created
+        try:
+            from websocket_proxy.app_integration import teardown_broker_adapter
+            teardown_broker_adapter(user)
+        except Exception as ws_err:
+            logger.debug(f"WebSocket adapter teardown (non-critical): {ws_err}")
+
         msg = f"Switched to account '{account['account_name']}'"
         if reauthed:
             msg += " (re-authenticated)"
@@ -449,6 +464,26 @@ def set_active_account(account_id):
             f"User {user} activated broker account '{account['account_name']}' ({broker})"
             + (" [auto-reauth]" if reauthed else "")
         )
+
+        # Trigger smart master contract download for the new broker
+        try:
+            from database.master_contract_status_db import init_broker_status
+            from utils.auth_utils import should_download_master_contract, async_master_contract_download, load_existing_master_contract
+            from threading import Thread
+
+            init_broker_status(broker)
+            should_download, reason = should_download_master_contract(broker)
+            logger.info(f"Set-active: smart download check for {broker}: should_download={should_download}, reason={reason}")
+
+            if should_download:
+                thread = Thread(target=async_master_contract_download, args=(broker,), daemon=True)
+                thread.start()
+            else:
+                logger.info(f"Set-active: Skipping download for {broker}: {reason}")
+                thread = Thread(target=load_existing_master_contract, args=(broker,), daemon=True)
+                thread.start()
+        except Exception as mc_err:
+            logger.warning(f"Master contract download trigger in set_active failed: {mc_err}")
 
         return jsonify({
             "status": "success",
@@ -646,6 +681,10 @@ def _auto_authenticate_totp(account_id, user, broker, account):
         try:
             # Ensure env vars are set
             _set_account_env(account)
+
+            # Set target broker before authentication
+            from database.token_db_enhanced import BrokerSymbolCache
+            BrokerSymbolCache.get_instance().set_target_broker(broker)
 
             # Get the broker auth function
             broker_auth_functions = current_app.broker_auth_functions

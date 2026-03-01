@@ -5,7 +5,7 @@ import { Toaster } from '@/components/ui/sonner'
 import { useAlertStore } from '@/stores/alertStore'
 import { MarketDataProvider } from '@/contexts/MarketDataContext'
 
-const queryClient = new QueryClient({
+export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 1000 * 60, // 1 minute

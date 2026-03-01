@@ -502,13 +502,19 @@ export default function OptionChain() {
     }
   }, [selectedExchange])
 
-  // Fetch expiries when underlying changes
+  // Fetch expiries when underlying changes (with retry for master contract loading)
+  const [expiriesLoading, setExpiriesLoading] = useState(false)
   useEffect(() => {
     if (!selectedUnderlying) return
     setExpiries([])
     setSelectedExpiry('')
+    setExpiriesLoading(true)
 
     let cancelled = false
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    const MAX_RETRIES = 15 // 15 × 2s = 30s max wait
+    let retryCount = 0
+
     const fetchExpiries = async () => {
       try {
         const response = await oiProfileApi.getExpiries(selectedExchange, selectedUnderlying)
@@ -516,18 +522,28 @@ export default function OptionChain() {
         if (response.status === 'success' && response.expiries.length > 0) {
           setExpiries(response.expiries)
           setSelectedExpiry(response.expiries[0])
+          setExpiriesLoading(false)
+        } else if (retryCount < MAX_RETRIES) {
+          // Master contract may still be downloading — retry after 2s
+          retryCount++
+          retryTimer = setTimeout(fetchExpiries, 2000)
         } else {
+          // Give up after max retries
           setExpiries([])
           setSelectedExpiry('')
+          setExpiriesLoading(false)
+          showToast.error('No expiry dates found. Master contract may not be loaded yet.')
         }
       } catch {
         if (cancelled) return
+        setExpiriesLoading(false)
         showToast.error('Failed to load expiry dates')
       }
     }
     fetchExpiries()
     return () => {
       cancelled = true
+      if (retryTimer) clearTimeout(retryTimer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedUnderlying])
@@ -873,8 +889,11 @@ export default function OptionChain() {
       )}
 
       {!data && !error && (
-        <div className="flex items-center justify-center py-16">
+        <div className="flex flex-col items-center justify-center py-16 gap-3">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+          {expiriesLoading && (
+            <p className="text-sm text-muted-foreground">Loading master contract data...</p>
+          )}
         </div>
       )}
 

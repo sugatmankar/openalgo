@@ -1,6 +1,7 @@
 import importlib
 import os
 import re
+import threading
 import time
 from datetime import datetime, date
 from threading import Thread
@@ -50,6 +51,8 @@ def should_download_master_contract(broker):
     Determine if master contract should be downloaded based on smart download logic.
 
     Rules:
+    - If the in-memory cache currently holds a DIFFERENT broker's data: always download
+      (the symtoken table is a single shared table that gets wiped on each download)
     - If never downloaded before: always download
     - If downloaded today after cutoff time (default 08:00 IST): skip download, use cached
     - If downloaded before cutoff time today: download fresh
@@ -58,6 +61,43 @@ def should_download_master_contract(broker):
     Returns:
         tuple: (should_download: bool, reason: str)
     """
+    # Check if the symbol cache currently holds data for a different broker.
+    # The symtoken table is shared — only one broker's data exists at a time.
+    # If we switched brokers, the table (and cache) still has the old broker's
+    # symbols, so we MUST re-download even if this broker was downloaded today.
+    try:
+        from database.token_db_enhanced import get_cache
+
+        cache = get_cache()
+        # Case 1: cache loaded with a different broker → stale data in table
+        if cache.cache_loaded and cache.active_broker and cache.active_broker != broker:
+            return True, (
+                f"Broker switched from '{cache.active_broker}' to '{broker}' — "
+                f"symtoken table has stale data, re-download required"
+            )
+        # Case 2: a broker switch was requested (_target_broker set) but cache
+        # is not yet loaded (e.g. after logout/restart).  The DB may hold a
+        # different broker's symbols from the last download, so we can't trust
+        # timestamps alone — force a fresh download.
+        if cache._target_broker and cache._target_broker == broker and not cache.cache_loaded:
+            return True, (
+                f"Broker switch to '{broker}' requested but cache is empty — "
+                f"symtoken table may have stale data, re-download required"
+            )
+        # Case 3: target_broker is set to this broker and cache IS loaded.
+        # This happens when set_active_account was called but a prior
+        # load_existing_master_contract (from authenticate) already loaded the
+        # symtoken table — which may contain the WRONG broker's data (the
+        # symtoken table is shared, single-table, no broker column).
+        # Force a fresh download to ensure the table has the right data.
+        if cache._target_broker and cache._target_broker == broker and cache.cache_loaded:
+            return True, (
+                f"Broker switch to '{broker}' in progress (target_broker set) — "
+                f"symtoken table may have stale data, re-download required"
+            )
+    except Exception:
+        pass  # If cache check fails, fall through to normal logic
+
     last_download = get_last_download_time(broker)
 
     if last_download is None:
@@ -212,13 +252,28 @@ def mask_api_credential(credential, show_chars=4):
     return credential[:show_chars] + "*" * (len(credential) - show_chars)
 
 
+# Lock to serialise master-contract downloads across broker-switch threads.
+# Without this, two concurrent downloads (e.g. flattrade finishing while fyers
+# starts) can both wipe and write to the shared symtoken table simultaneously,
+# leaving the DB and in-memory cache in an inconsistent state.
+_download_lock = threading.Lock()
+
+
 def async_master_contract_download(broker):
     """
     Asynchronously download the master contract and emit a WebSocket event upon completion,
     with the 'broker' parameter specifying the broker for which to download the contract.
 
     Tracks download duration and exchange-wise statistics for smart download feature.
+    Uses a module-level lock to prevent concurrent downloads from corrupting
+    the shared symtoken table.
     """
+    with _download_lock:
+        return _do_master_contract_download(broker)
+
+
+def _do_master_contract_download(broker):
+    """Inner implementation of async_master_contract_download, called under _download_lock."""
     start_time = time.time()
 
     # Update status to downloading
@@ -352,6 +407,16 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
 
     if inserted_id:
         logger.info(f"Database record upserted with ID: {inserted_id}")
+
+        # Signal the target broker so stale symbol lookups are blocked
+        # during the download.  Without this, the WebSocket proxy and
+        # REST API can still return old-broker symbols.
+        try:
+            from database.token_db_enhanced import get_cache
+            get_cache().set_target_broker(broker)
+        except Exception:
+            pass
+
         # Initialize master contract status for this broker
         init_broker_status(broker)
 

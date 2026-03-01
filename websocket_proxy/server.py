@@ -14,7 +14,7 @@ import zmq.asyncio
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-from database.auth_db import get_broker_name, verify_api_key
+from database.auth_db import get_auth_token, get_broker_name, verify_api_key
 from services.market_data_service import get_market_data_service
 from utils.logging import get_logger, highlight_url
 
@@ -63,6 +63,7 @@ class WebSocketProxy:
         self.broker_adapters = {}  # Maps user_id to broker adapter
         self.user_mapping = {}  # Maps client_id to user_id
         self.user_broker_mapping = {}  # Maps user_id to broker_name
+        self.adapter_token_hashes = {}  # Maps user_id to SHA256 hash of auth token at adapter creation
         self.running = False
 
         # PERFORMANCE OPTIMIZATION: Subscription index for O(1) lookup
@@ -515,6 +516,69 @@ class WebSocketProxy:
 
             del self.user_mapping[client_id]
 
+    def teardown_user_adapter(self, user_id: str, reason: str = "broker switch"):
+        """
+        Tear down a user's broker adapter: unsubscribe all symbols, disconnect
+        the WebSocket, and clean up all related mappings.
+
+        This is called when a broker switch is detected (from Flask or
+        subscribe_client) so the old broker's sockets are fully closed.
+
+        Safe to call from any thread — does only synchronous adapter operations.
+        """
+        broker_name = self.user_broker_mapping.get(user_id, "unknown")
+        adapter = self.broker_adapters.pop(user_id, None)
+        self.adapter_token_hashes.pop(user_id, None)
+
+        if not adapter:
+            logger.debug(f"No adapter to tear down for user {user_id}")
+            return
+
+        logger.info(
+            f"Tearing down {broker_name} adapter for user {user_id} ({reason}). "
+            f"Unsubscribing all symbols and closing sockets."
+        )
+
+        # Unsubscribe all symbols from the adapter
+        try:
+            if hasattr(adapter, "unsubscribe_all"):
+                adapter.unsubscribe_all()
+        except Exception as e:
+            logger.warning(f"Error unsubscribing all from {broker_name} adapter: {e}")
+
+        # Disconnect the adapter (closes WebSocket connection)
+        try:
+            adapter.disconnect()
+        except Exception as e:
+            logger.warning(f"Error disconnecting {broker_name} adapter: {e}")
+
+        # Clean up subscription index entries for all clients of this user
+        client_ids_for_user = [
+            cid for cid, uid in self.user_mapping.items() if uid == user_id
+        ]
+        for cid in client_ids_for_user:
+            if cid in self.subscriptions:
+                for sub_json in self.subscriptions[cid]:
+                    try:
+                        sub_info = json.loads(sub_json)
+                        sub_key = (
+                            sub_info.get("symbol"),
+                            sub_info.get("exchange"),
+                            sub_info.get("mode"),
+                        )
+                        if sub_key in self.subscription_index:
+                            self.subscription_index[sub_key].discard(cid)
+                            if not self.subscription_index[sub_key]:
+                                del self.subscription_index[sub_key]
+                    except Exception:
+                        pass
+                del self.subscriptions[cid]
+
+        # Clear broker mapping so next authenticate creates fresh adapter
+        self.user_broker_mapping.pop(user_id, None)
+
+        logger.info(f"Teardown complete for {broker_name} adapter (user {user_id})")
+
     async def process_client_message(self, client_id, message):
         """
         Process messages from a client
@@ -644,6 +708,27 @@ class WebSocketProxy:
             await self.send_error(client_id, "AUTHENTICATION_ERROR", "API key is required")
             return
 
+        # CRITICAL: Clear all local auth caches BEFORE verifying the API key.
+        # The ZMQ-based cache invalidation (issue #765) uses PUB→PUB topology
+        # which silently drops messages — invalidation never reaches this process.
+        # Clearing caches here ensures verify_api_key(), get_broker_name(), and
+        # get_auth_token() always read current state from DB on authenticate.
+        try:
+            from database.auth_db import (
+                auth_cache,
+                broker_cache,
+                feed_token_cache,
+                invalid_api_key_cache,
+                verified_api_key_cache,
+            )
+            auth_cache.clear()
+            broker_cache.clear()
+            feed_token_cache.clear()
+            verified_api_key_cache.clear()
+            invalid_api_key_cache.clear()
+        except Exception as cache_err:
+            logger.debug(f"Could not clear auth caches: {cache_err}")
+
         # Verify the API key and get the user ID
         user_id = verify_api_key(api_key)
 
@@ -664,7 +749,51 @@ class WebSocketProxy:
             return
 
         # Store the broker mapping for this user
+        previous_broker = self.user_broker_mapping.get(user_id)
         self.user_broker_mapping[user_id] = broker_name
+
+        # Detect broker switch: if the user's broker changed, tear down the old adapter
+        # so a new one is created for the correct broker.
+        if (
+            user_id in self.broker_adapters
+            and previous_broker
+            and previous_broker != broker_name
+        ):
+            old_adapter = self.broker_adapters.pop(user_id)
+            self.adapter_token_hashes.pop(user_id, None)
+            logger.info(
+                f"Broker switched from '{previous_broker}' to '{broker_name}' for user {user_id}. "
+                f"Disconnecting old {previous_broker} adapter."
+            )
+            try:
+                old_adapter.disconnect()
+            except Exception as e:
+                logger.warning(f"Error disconnecting old {previous_broker} adapter: {e}")
+
+        # Detect stale auth token: same broker but credentials have changed
+        # (e.g., after re-login or switching between accounts on the same broker).
+        # The adapter was created with old credentials that are now invalid.
+        if user_id in self.broker_adapters:
+            try:
+                current_token = get_auth_token(user_id, bypass_cache=True)
+                if current_token:
+                    import hashlib
+                    current_hash = hashlib.sha256(current_token.encode()).hexdigest()[:16]
+                    stored_hash = self.adapter_token_hashes.get(user_id)
+                    if stored_hash and current_hash != stored_hash:
+                        logger.info(
+                            f"Auth token changed for user {user_id} "
+                            f"(broker={broker_name}). "
+                            f"Tearing down stale adapter to force re-creation."
+                        )
+                        old_adapter = self.broker_adapters.pop(user_id)
+                        self.adapter_token_hashes.pop(user_id, None)
+                        try:
+                            old_adapter.disconnect()
+                        except Exception as e:
+                            logger.warning(f"Error disconnecting stale adapter: {e}")
+            except Exception as e:
+                logger.debug(f"Token hash comparison skipped: {e}")
 
         # Create or reuse broker adapter
         if user_id not in self.broker_adapters:
@@ -774,6 +903,17 @@ class WebSocketProxy:
                 # Store the adapter
                 self.broker_adapters[user_id] = adapter
 
+                # Store auth token hash for staleness detection on next authenticate
+                try:
+                    import hashlib
+                    fresh_token = get_auth_token(user_id)
+                    if fresh_token:
+                        self.adapter_token_hashes[user_id] = hashlib.sha256(
+                            fresh_token.encode()
+                        ).hexdigest()[:16]
+                except Exception:
+                    pass
+
                 logger.info(
                     f"Successfully created and connected {broker_name} adapter for user {user_id}"
                 )
@@ -811,6 +951,16 @@ class WebSocketProxy:
                                 )
                                 if not connect_is_error:
                                     self.broker_adapters[user_id] = adapter
+                                    # Store auth token hash for staleness detection
+                                    try:
+                                        import hashlib
+                                        fresh_token = get_auth_token(user_id)
+                                        if fresh_token:
+                                            self.adapter_token_hashes[user_id] = hashlib.sha256(
+                                                fresh_token.encode()
+                                            ).hexdigest()[:16]
+                                    except Exception:
+                                        pass
                                     logger.info(f"Successfully connected {broker_name} adapter for user {user_id} after retry")
                                     # Fall through to success response
                                 else:
@@ -976,6 +1126,171 @@ class WebSocketProxy:
 
         adapter = self.broker_adapters[user_id]
         broker_name = self.user_broker_mapping.get(user_id, "unknown")
+
+        # ── Broker-switch detection ──────────────────────────────────────
+        # If the user switched brokers on the Flask side (set_active_account),
+        # the Auth DB has the NEW broker but our adapter is still for the OLD
+        # broker. Detect this, tear down the stale adapter, and transparently
+        # create a new one so the frontend doesn't have to re-authenticate.
+        try:
+            from database.auth_db import Auth as _Auth, auth_cache as _auth_cache, broker_cache as _broker_cache
+
+            # Clear broker caches so we get fresh DB data
+            _auth_cache.clear()
+            _broker_cache.clear()
+
+            _auth_row = _Auth.query.filter_by(name=user_id).first()
+            _db_broker = _auth_row.broker if _auth_row else None
+
+            if _db_broker and _db_broker != broker_name:
+                logger.info(
+                    f"Broker switch detected in subscribe: adapter has '{broker_name}' "
+                    f"but Auth DB has '{_db_broker}' for user {user_id}. "
+                    f"Tearing down old adapter and creating new one."
+                )
+
+                # Tear down the old adapter (unsubscribe all, disconnect, clean mappings)
+                self.teardown_user_adapter(user_id, reason=f"subscribe detected switch to {_db_broker}")
+
+                # Create a new adapter for the correct broker
+                _new_adapter = create_broker_adapter(_db_broker)
+                if _new_adapter:
+                    _init_result = _new_adapter.initialize(_db_broker, user_id)
+                    _init_ok = not (_init_result and _init_result.get("status") == "error")
+
+                    if _init_ok:
+                        _conn_result = _new_adapter.connect()
+                        _conn_ok = not (
+                            (_conn_result and _conn_result.get("status") == "error")
+                            or (_conn_result and _conn_result.get("success") is False)
+                        )
+
+                        if _conn_ok:
+                            # Store the new adapter and update mappings
+                            self.broker_adapters[user_id] = _new_adapter
+                            self.user_broker_mapping[user_id] = _db_broker
+
+                            # Store token hash for staleness detection
+                            try:
+                                import hashlib as _hl
+                                _fresh_token = get_auth_token(user_id)
+                                if _fresh_token:
+                                    self.adapter_token_hashes[user_id] = _hl.sha256(
+                                        _fresh_token.encode()
+                                    ).hexdigest()[:16]
+                            except Exception:
+                                pass
+
+                            adapter = _new_adapter
+                            broker_name = _db_broker
+                            logger.info(
+                                f"Successfully switched to {_db_broker} adapter for user {user_id} "
+                                f"(transparent re-creation in subscribe)"
+                            )
+                        else:
+                            _err = _conn_result.get("message", _conn_result.get("error", "connection failed"))
+                            logger.error(f"Failed to connect new {_db_broker} adapter: {_err}")
+                            await self.send_error(
+                                client_id, "BROKER_SWITCHED",
+                                f"Broker changed to {_db_broker} but adapter connection failed. "
+                                f"Please re-authenticate."
+                            )
+                            return
+                    else:
+                        _err = _init_result.get("message", "init failed")
+                        logger.error(f"Failed to initialize new {_db_broker} adapter: {_err}")
+                        await self.send_error(
+                            client_id, "BROKER_SWITCHED",
+                            f"Broker changed to {_db_broker} but adapter initialization failed. "
+                            f"Please re-authenticate."
+                        )
+                        return
+                else:
+                    logger.error(f"Failed to create adapter for {_db_broker}")
+                    await self.send_error(
+                        client_id, "BROKER_SWITCHED",
+                        f"Broker changed to {_db_broker} but adapter creation failed. "
+                        f"Please re-authenticate."
+                    )
+                    return
+        except ImportError:
+            pass  # Auth module not available; skip broker-switch detection
+        except Exception as _switch_err:
+            logger.debug(f"Broker-switch detection in subscribe skipped: {_switch_err}")
+
+        # Check if the symbol cache is ready for the active broker.
+        # After a broker switch, the master contract downloads in a background
+        # thread.  If a subscribe arrives before it finishes, the cache (or the
+        # underlying DB) still holds the *previous* broker's symbols and the
+        # lookup would return wrong broker-specific symbols (e.g. Flattrade
+        # format "Nifty 50" for a Fyers adapter that needs "NSE:NIFTY50-INDEX").
+        #
+        # Instead of failing immediately (which forces users to hard-refresh),
+        # poll the cache readiness for up to ~30 seconds, sleeping 1 second
+        # between checks.  Master contract downloads typically take 5-15s.
+        try:
+            import asyncio as _asyncio
+            from database.token_db_enhanced import get_cache as _get_symbol_cache
+
+            _CACHE_WAIT_MAX = 30  # seconds
+            _CACHE_POLL_INTERVAL = 1  # second
+            _waited = 0
+            _cache_ok = False
+
+            while _waited <= _CACHE_WAIT_MAX:
+                _sc = _get_symbol_cache()
+
+                cache_ready_for_broker = (
+                    _sc.cache_loaded
+                    and _sc.active_broker == broker_name
+                )
+
+                target_mismatch = (
+                    _sc._target_broker
+                    and _sc._target_broker != _sc.active_broker
+                )
+
+                if cache_ready_for_broker and not target_mismatch:
+                    _cache_ok = True
+                    if _waited > 0:
+                        logger.info(
+                            f"Symbol cache became ready for '{broker_name}' after ~{_waited}s wait."
+                        )
+                    break
+
+                # On first iteration, log the reason we're waiting
+                if _waited == 0:
+                    reason = ""
+                    if _sc.cache_loaded and _sc.active_broker != broker_name:
+                        reason = f"cache has '{_sc.active_broker}' but adapter is '{broker_name}'"
+                    elif not _sc.cache_loaded:
+                        reason = f"cache not loaded yet for '{broker_name}'"
+                    elif target_mismatch:
+                        reason = (
+                            f"download in progress (target='{_sc._target_broker}', "
+                            f"current='{_sc.active_broker}')"
+                        )
+                    logger.info(
+                        f"Symbol cache not ready for '{broker_name}': {reason}. "
+                        f"Waiting up to {_CACHE_WAIT_MAX}s for it to load..."
+                    )
+
+                await _asyncio.sleep(_CACHE_POLL_INTERVAL)
+                _waited += _CACHE_POLL_INTERVAL
+
+            if not _cache_ok:
+                logger.warning(
+                    f"Symbol cache still not ready for '{broker_name}' after {_CACHE_WAIT_MAX}s. "
+                    f"Giving up on subscribe."
+                )
+                await self.send_error(
+                    client_id,
+                    "CACHE_NOT_READY",
+                    f"Symbol data is still loading for {broker_name}. Please retry in a few seconds.",
+                )
+                return
+        except Exception as _cache_err:
+            logger.debug(f"Symbol cache check skipped: {_cache_err}")
 
         # Process each symbol in the subscription request
         subscription_responses = []

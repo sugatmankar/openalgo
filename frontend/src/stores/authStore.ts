@@ -18,6 +18,8 @@ interface AuthStore {
   login: (username: string, broker: string) => void
   logout: () => void
   checkSession: () => boolean
+  /** Update the broker name after a broker account switch */
+  updateBroker: (broker: string) => void
 }
 
 export const useAuthStore = create<AuthStore>()(
@@ -43,6 +45,13 @@ export const useAuthStore = create<AuthStore>()(
 
       logout: () => {
         set({ user: null, isAuthenticated: false, apiKey: null })
+      },
+
+      updateBroker: (broker) => {
+        const { user } = get()
+        if (user) {
+          set({ user: { ...user, broker } })
+        }
       },
 
       checkSession: () => {

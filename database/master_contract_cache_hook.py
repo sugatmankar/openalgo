@@ -36,9 +36,18 @@ def load_symbols_to_cache(broker: str) -> bool:
             load_time = time.time() - start_time
             stats = get_cache_stats()
 
+            # Clear downstream caches that depend on symbol data
+            # The strikes cache in option_symbol_service stores query results
+            # keyed by symbol patterns — stale entries would cause 0-strike lookups
+            try:
+                from services.option_symbol_service import clear_strikes_cache
+                clear_strikes_cache()
+            except Exception as e:
+                logger.debug(f"Could not clear strikes cache: {e}")
+
             logger.info(
                 f"Successfully loaded {stats['total_symbols']} symbols into cache "
-                f"in {load_time:.2f} seconds"
+                f"for broker '{broker}' in {load_time:.2f} seconds"
             )
 
             # Emit success event to frontend
@@ -123,6 +132,13 @@ def clear_cache_on_logout():
 
         # Clear the cache
         clear_cache()
+
+        # Also clear downstream caches that depend on symbol data
+        try:
+            from services.option_symbol_service import clear_strikes_cache
+            clear_strikes_cache()
+        except Exception:
+            pass
 
         logger.info(f"Cache cleared. Removed {symbols_cleared} symbols from memory")
 
