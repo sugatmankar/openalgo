@@ -442,8 +442,8 @@ def set_active_account(account_id):
         _set_account_env(account)
 
         # Set target broker BEFORE any data operations
-        from database.token_db_enhanced import BrokerSymbolCache
-        BrokerSymbolCache.get_instance().set_target_broker(broker)
+        from database.token_db_enhanced import get_cache
+        get_cache().set_target_broker(broker)
 
         # Clear stale strikes cache from previous broker
         from services.option_symbol_service import clear_strikes_cache
@@ -683,8 +683,8 @@ def _auto_authenticate_totp(account_id, user, broker, account):
             _set_account_env(account)
 
             # Set target broker before authentication
-            from database.token_db_enhanced import BrokerSymbolCache
-            BrokerSymbolCache.get_instance().set_target_broker(broker)
+            from database.token_db_enhanced import get_cache
+            get_cache().set_target_broker(broker)
 
             # Get the broker auth function
             broker_auth_functions = current_app.broker_auth_functions
