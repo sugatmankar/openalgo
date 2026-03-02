@@ -13,6 +13,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useMarketData } from '@/hooks/useMarketData'
 import { tradingApi } from '@/api/trading'
 import { optionChainApi } from '@/api/option-chain'
+import { getIndexSymbolsLotSizes } from '@/api/flow'
 import type { PlaceOrderRequest } from '@/types/trading'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -37,12 +38,12 @@ import { cn } from '@/lib/utils'
 // ==================== Constants ====================
 
 const UNDERLYINGS = [
-  { value: 'NIFTY', exchange: 'NFO', strikeGap: 50, lotSize: 75 },
-  { value: 'BANKNIFTY', exchange: 'NFO', strikeGap: 100, lotSize: 15 },
-  { value: 'FINNIFTY', exchange: 'NFO', strikeGap: 50, lotSize: 25 },
-  { value: 'MIDCPNIFTY', exchange: 'NFO', strikeGap: 25, lotSize: 50 },
-  { value: 'SENSEX', exchange: 'BFO', strikeGap: 100, lotSize: 10 },
-  { value: 'BANKEX', exchange: 'BFO', strikeGap: 100, lotSize: 15 },
+  { value: 'NIFTY', exchange: 'NFO', strikeGap: 50 },
+  { value: 'BANKNIFTY', exchange: 'NFO', strikeGap: 100 },
+  { value: 'FINNIFTY', exchange: 'NFO', strikeGap: 50 },
+  { value: 'MIDCPNIFTY', exchange: 'NFO', strikeGap: 25 },
+  { value: 'SENSEX', exchange: 'BFO', strikeGap: 100 },
+  { value: 'BANKEX', exchange: 'BFO', strikeGap: 100 },
 ]
 
 const LOT_PRESETS = [1, 2, 3, 5, 10]
@@ -98,6 +99,9 @@ function ScalperTerminal() {
   const [lots, setLots] = useState(1)
   const [customLots, setCustomLots] = useState('')
 
+  // Dynamic lot sizes from master contract DB
+  const [lotSizeMap, setLotSizeMap] = useState<Record<string, number>>({})
+
   // Strike state
   const [spotLtp, setSpotLtp] = useState(0)
   const [atmStrike, setAtmStrike] = useState(0)
@@ -118,8 +122,11 @@ function ScalperTerminal() {
 
   // Derived values
   const underlyingConfig = useMemo(
-    () => UNDERLYINGS.find((u) => u.value === underlying)!,
-    [underlying]
+    () => {
+      const base = UNDERLYINGS.find((u) => u.value === underlying)!
+      return { ...base, lotSize: lotSizeMap[underlying] || 1 }
+    },
+    [underlying, lotSizeMap]
   )
   const currentStrike = useMemo(
     () => atmStrike + strikeOffset * underlyingConfig.strikeGap,
@@ -344,6 +351,21 @@ function ScalperTerminal() {
   }, [positions.length, refreshPositions])
 
   // ==================== Effects ====================
+
+  // Fetch dynamic lot sizes from master contract DB on mount
+  useEffect(() => {
+    getIndexSymbolsLotSizes()
+      .then((symbols) => {
+        const map: Record<string, number> = {}
+        for (const s of symbols) {
+          map[s.value] = s.lotSize
+        }
+        setLotSizeMap(map)
+      })
+      .catch(() => {
+        console.error('Failed to fetch lot sizes from DB')
+      })
+  }, [])
 
   // Load expiries on underlying change
   useEffect(() => {

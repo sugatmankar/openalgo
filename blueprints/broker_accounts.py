@@ -466,24 +466,28 @@ def set_active_account(account_id):
         )
 
         # Trigger smart master contract download for the new broker
-        try:
-            from database.master_contract_status_db import init_broker_status
-            from utils.auth_utils import should_download_master_contract, async_master_contract_download, load_existing_master_contract
-            from threading import Thread
+        # Skip if auto-reauth already triggered a download inside _auto_authenticate_totp
+        if not reauthed:
+            try:
+                from database.master_contract_status_db import init_broker_status
+                from utils.auth_utils import should_download_master_contract, async_master_contract_download, load_existing_master_contract
+                from threading import Thread
 
-            init_broker_status(broker)
-            should_download, reason = should_download_master_contract(broker)
-            logger.info(f"Set-active: smart download check for {broker}: should_download={should_download}, reason={reason}")
+                init_broker_status(broker)
+                should_download, reason = should_download_master_contract(broker)
+                logger.info(f"Set-active: smart download check for {broker}: should_download={should_download}, reason={reason}")
 
-            if should_download:
-                thread = Thread(target=async_master_contract_download, args=(broker,), daemon=True)
-                thread.start()
-            else:
-                logger.info(f"Set-active: Skipping download for {broker}: {reason}")
-                thread = Thread(target=load_existing_master_contract, args=(broker,), daemon=True)
-                thread.start()
-        except Exception as mc_err:
-            logger.warning(f"Master contract download trigger in set_active failed: {mc_err}")
+                if should_download:
+                    thread = Thread(target=async_master_contract_download, args=(broker,), daemon=True)
+                    thread.start()
+                else:
+                    logger.info(f"Set-active: Skipping download for {broker}: {reason}")
+                    thread = Thread(target=load_existing_master_contract, args=(broker,), daemon=True)
+                    thread.start()
+            except Exception as mc_err:
+                logger.warning(f"Master contract download trigger in set_active failed: {mc_err}")
+        else:
+            logger.info(f"Set-active: Skipping download for {broker} — already triggered by auto-reauth")
 
         return jsonify({
             "status": "success",
