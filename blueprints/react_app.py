@@ -5,7 +5,7 @@ Serves the pre-built React app for migrated routes.
 
 from pathlib import Path
 
-from flask import Blueprint, send_file, send_from_directory
+from flask import Blueprint, make_response, send_file, send_from_directory
 
 react_bp = Blueprint("react", __name__)
 
@@ -41,7 +41,14 @@ npm run build</pre>
         )
 
     index_path = FRONTEND_DIST / "index.html"
-    return send_file(index_path, mimetype="text/html")
+    response = make_response(send_file(index_path, mimetype="text/html"))
+    # Prevent browser from caching index.html so new builds are picked up
+    # immediately without requiring a hard refresh. JS/CSS chunks already have
+    # content hashes in their filenames for long-term caching.
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 # ============================================================

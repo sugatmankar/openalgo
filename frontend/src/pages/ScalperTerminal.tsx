@@ -13,7 +13,6 @@ import { useAuthStore } from '@/stores/authStore'
 import { useMarketData } from '@/hooks/useMarketData'
 import { tradingApi } from '@/api/trading'
 import { optionChainApi } from '@/api/option-chain'
-import { getIndexSymbolsLotSizes } from '@/api/flow'
 import type { PlaceOrderRequest } from '@/types/trading'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -45,6 +44,12 @@ const UNDERLYINGS = [
   { value: 'SENSEX', exchange: 'BFO', strikeGap: 100 },
   { value: 'BANKEX', exchange: 'BFO', strikeGap: 100 },
 ]
+
+// Fallback lot sizes (used if API unavailable) — will be overridden by dynamic values
+const FALLBACK_LOT_SIZES: Record<string, number> = {
+  NIFTY: 75, BANKNIFTY: 30, FINNIFTY: 65, MIDCPNIFTY: 120,
+  SENSEX: 20, BANKEX: 30,
+}
 
 const LOT_PRESETS = [1, 2, 3, 5, 10]
 
@@ -99,8 +104,8 @@ function ScalperTerminal() {
   const [lots, setLots] = useState(1)
   const [customLots, setCustomLots] = useState('')
 
-  // Dynamic lot sizes from master contract DB
-  const [lotSizeMap, setLotSizeMap] = useState<Record<string, number>>({})
+  // Dynamic lot sizes from master contract DB (starts with fallbacks, updated from API)
+  const [lotSizeMap, setLotSizeMap] = useState<Record<string, number>>(FALLBACK_LOT_SIZES)
 
   // Strike state
   const [spotLtp, setSpotLtp] = useState(0)
@@ -124,7 +129,7 @@ function ScalperTerminal() {
   const underlyingConfig = useMemo(
     () => {
       const base = UNDERLYINGS.find((u) => u.value === underlying)!
-      return { ...base, lotSize: lotSizeMap[underlying] || 1 }
+      return { ...base, lotSize: lotSizeMap[underlying] || FALLBACK_LOT_SIZES[underlying] || 1 }
     },
     [underlying, lotSizeMap]
   )
@@ -353,17 +358,22 @@ function ScalperTerminal() {
   // ==================== Effects ====================
 
   // Fetch dynamic lot sizes from master contract DB on mount
+  // Uses raw fetch() instead of webClient to avoid 401 redirect interceptor
+  // that can cause blank page on SPA navigation
   useEffect(() => {
-    getIndexSymbolsLotSizes()
-      .then((symbols) => {
-        const map: Record<string, number> = {}
-        for (const s of symbols) {
-          map[s.value] = s.lotSize
+    fetch('/flow/api/index-symbols', { credentials: 'include' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (json?.data?.length > 0) {
+          const map: Record<string, number> = { ...FALLBACK_LOT_SIZES }
+          for (const s of json.data) {
+            if (s.value && s.lotSize) map[s.value] = s.lotSize
+          }
+          setLotSizeMap(map)
         }
-        setLotSizeMap(map)
       })
       .catch(() => {
-        console.error('Failed to fetch lot sizes from DB')
+        console.warn('Failed to fetch lot sizes from DB — using fallbacks')
       })
   }, [])
 
@@ -708,6 +718,11 @@ function ScalperTerminal() {
                     />
                   </div>
                   <div className="flex items-center gap-1 ml-auto">
+                    <span className="text-xs text-muted-foreground">Lot:</span>
+                    <span className="text-xs tabular-nums text-muted-foreground">{underlyingConfig.lotSize}</span>
+                    <span className="text-xs text-muted-foreground mx-1">×</span>
+                    <span className="text-xs text-muted-foreground">{lots}</span>
+                    <span className="text-xs text-muted-foreground mx-1">=</span>
                     <span className="text-xs text-muted-foreground">Qty:</span>
                     <span className="font-bold text-sm tabular-nums">{quantity}</span>
                   </div>
