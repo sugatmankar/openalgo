@@ -48,12 +48,12 @@ const UNDERLYINGS = [
 const LOT_PRESETS = [1, 2, 3, 5, 10]
 
 const INDEX_EXCHANGE_MAP: Record<string, string> = {
-  NIFTY: 'NSE',
-  BANKNIFTY: 'NSE',
-  FINNIFTY: 'NSE',
-  MIDCPNIFTY: 'NSE',
-  SENSEX: 'BSE',
-  BANKEX: 'BSE',
+  NIFTY: 'NSE_INDEX',
+  BANKNIFTY: 'NSE_INDEX',
+  FINNIFTY: 'NSE_INDEX',
+  MIDCPNIFTY: 'NSE_INDEX',
+  SENSEX: 'BSE_INDEX',
+  BANKEX: 'BSE_INDEX',
 }
 
 // ==================== Helpers ====================
