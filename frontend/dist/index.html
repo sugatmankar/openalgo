@@ -8,7 +8,7 @@
     <meta name="description" content="OpenAlgo - Open Source Algorithmic Trading Platform" />
     <meta name="theme-color" content="#3b82f6" />
     <title>OpenAlgo</title>
-    <script type="module" crossorigin src="/assets/index-DGcANpv_.js"></script>
+    <script type="module" crossorigin src="/assets/index-4m1mws5n.js"></script>
     <link rel="modulepreload" crossorigin href="/assets/vendor-charts-l0_txfiz.js">
     <link rel="modulepreload" crossorigin href="/assets/vendor-react-Oj_OEjND.js">
     <link rel="modulepreload" crossorigin href="/assets/vendor-icons-Bcg6STPA.js">
@@ -18,6 +18,32 @@
     <link rel="stylesheet" crossorigin href="/assets/index-BwTJ6aKM.css">
   </head>
   <body>
+    <!-- Inline script to prevent theme flash (FOUC) on page load.
+         Reads Zustand persist state from localStorage and applies
+         the correct CSS class BEFORE React renders. -->
+    <script>
+      ;(function () {
+        try {
+          var raw = localStorage.getItem('openalgo-theme')
+          if (raw) {
+            var parsed = JSON.parse(raw)
+            var state = parsed && parsed.state
+            if (state) {
+              if (state.appMode === 'analyzer') {
+                document.documentElement.classList.add('analyzer')
+              } else if (state.mode === 'dark') {
+                document.documentElement.classList.add('dark')
+              }
+              if (state.color) {
+                document.documentElement.setAttribute('data-theme', state.color)
+              }
+            }
+          }
+        } catch (e) {
+          // Ignore parse errors — React will handle theme on hydration
+        }
+      })()
+    </script>
     <div id="root"></div>
   </body>
 </html>

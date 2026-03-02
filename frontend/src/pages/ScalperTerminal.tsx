@@ -47,7 +47,7 @@ const UNDERLYINGS = [
 
 // Fallback lot sizes (used if API unavailable) — will be overridden by dynamic values
 const FALLBACK_LOT_SIZES: Record<string, number> = {
-  NIFTY: 75, BANKNIFTY: 30, FINNIFTY: 65, MIDCPNIFTY: 120,
+  NIFTY: 65, BANKNIFTY: 30, FINNIFTY: 65, MIDCPNIFTY: 120,
   SENSEX: 20, BANKEX: 30,
 }
 
@@ -120,6 +120,12 @@ function ScalperTerminal() {
   const [exitingPosition, setExitingPosition] = useState<string | null>(null)
   const [positions, setPositions] = useState<ScalperPosition[]>([])
   const [isLoadingPositions, setIsLoadingPositions] = useState(false)
+  const [initError, setInitError] = useState<string | null>(null)
+  const [initTrigger, setInitTrigger] = useState(0) // Increment to re-trigger initialization
+
+  // Track whether first data load is complete (expiries + LTP)
+  const [isInitializing, setIsInitializing] = useState(true)
+  const initDoneRef = useRef(false)
 
   // Refs
   const positionTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -199,46 +205,39 @@ function ScalperTerminal() {
 
   // ==================== API Calls ====================
 
-  const loadExpiries = useCallback(async () => {
-    if (!apiKey) return
-    setIsLoadingExpiries(true)
-    try {
-      const response = await optionChainApi.getExpiries(apiKey, underlying, underlyingConfig.exchange)
-      if (response.status === 'success' && response.data?.length > 0) {
-        setExpiries(response.data)
-        setExpiry(response.data[0])
-      } else {
-        showToast.error('Failed to load expiries')
-        setExpiries([])
-      }
-    } catch {
-      showToast.error('Failed to load expiries')
-      setExpiries([])
-    }
-    setIsLoadingExpiries(false)
-  }, [apiKey, underlying, underlyingConfig.exchange])
-
   const refreshLtp = useCallback(async () => {
-    if (!apiKey) return
+    if (!apiKey || !expiry) return
     setIsRefreshingLtp(true)
     try {
-      const indexExchange = INDEX_EXCHANGE_MAP[underlying] || 'NSE'
-      const symbol = `${underlying}`
-      const response = await tradingApi.getQuotes(apiKey, symbol, indexExchange)
-      if (response.status === 'success' && response.data) {
-        const ltp = response.data.ltp
+      const indexExchange = INDEX_EXCHANGE_MAP[underlying] || 'NSE_INDEX'
+      const expiryFormatted = convertExpiryToSymbol(expiry) // "06-MAR-25" → "06MAR25"
+      const response = await optionChainApi.getOptionSymbol(
+        apiKey, underlying, indexExchange, expiryFormatted, 'ATM', 'CE'
+      )
+      if (response.status === 'success' && response.underlying_ltp) {
+        const ltp = response.underlying_ltp
         setSpotLtp(ltp)
         const atm = Math.round(ltp / underlyingConfig.strikeGap) * underlyingConfig.strikeGap
         setAtmStrike(atm)
         setStrikeOffset(0)
+        // Update lot size from the same response
+        if (response.lotsize) {
+          setLotSizeMap(prev => ({ ...prev, [underlying]: response.lotsize! }))
+        }
+        setInitError(null)
       } else {
-        showToast.error('Failed to fetch LTP')
+        showToast.error(response.message || 'Failed to fetch LTP')
       }
     } catch {
       showToast.error('Failed to fetch LTP')
     }
     setIsRefreshingLtp(false)
-  }, [apiKey, underlying, underlyingConfig.strikeGap])
+    // Mark initialization as complete after first successful LTP fetch
+    if (!initDoneRef.current) {
+      initDoneRef.current = true
+      setIsInitializing(false)
+    }
+  }, [apiKey, underlying, expiry, underlyingConfig.strikeGap])
 
   const refreshPositions = useCallback(async () => {
     if (!apiKey) return
@@ -357,37 +356,107 @@ function ScalperTerminal() {
 
   // ==================== Effects ====================
 
-  // Fetch dynamic lot sizes from master contract DB on mount
-  // Uses raw fetch() instead of webClient to avoid 401 redirect interceptor
-  // that can cause blank page on SPA navigation
+  // Primary initialization: load expiries + LTP in one sequential flow with retry
+  // Modeled after OptionChain's retry pattern for master contract readiness
   useEffect(() => {
-    fetch('/flow/api/index-symbols', { credentials: 'include' })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json) => {
-        if (json?.data?.length > 0) {
-          const map: Record<string, number> = { ...FALLBACK_LOT_SIZES }
-          for (const s of json.data) {
-            if (s.value && s.lotSize) map[s.value] = s.lotSize
+    let cancelled = false
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+
+    const initialize = async () => {
+      if (!apiKey) return
+      setIsInitializing(true)
+      setInitError(null)
+      initDoneRef.current = false
+
+      const exchange = UNDERLYINGS.find((u) => u.value === underlying)!.exchange
+      const strikeGap = UNDERLYINGS.find((u) => u.value === underlying)!.strikeGap
+      const indexExchange = INDEX_EXCHANGE_MAP[underlying] || 'NSE_INDEX'
+
+      // Step 1: Load expiries with retry (master contract may still be downloading)
+      const MAX_RETRIES = 10
+      let retryCount = 0
+      let loadedExpiries: string[] = []
+
+      const tryLoadExpiries = async (): Promise<boolean> => {
+        try {
+          const resp = await optionChainApi.getExpiries(apiKey, underlying, exchange)
+          if (cancelled) return false
+          if (resp.status === 'success' && resp.data?.length > 0) {
+            loadedExpiries = resp.data
+            return true
           }
-          setLotSizeMap(map)
+          return false
+        } catch {
+          return false
         }
-      })
-      .catch(() => {
-        console.warn('Failed to fetch lot sizes from DB — using fallbacks')
-      })
-  }, [])
+      }
 
-  // Load expiries on underlying change
-  useEffect(() => {
-    loadExpiries()
-  }, [loadExpiries])
+      let gotExpiries = await tryLoadExpiries()
+      while (!gotExpiries && retryCount < MAX_RETRIES && !cancelled) {
+        retryCount++
+        console.log(`[Scalper] Expiry retry ${retryCount}/${MAX_RETRIES} — master contract may still be loading`)
+        await new Promise<void>((resolve) => {
+          retryTimer = setTimeout(resolve, 2000)
+        })
+        if (cancelled) return
+        gotExpiries = await tryLoadExpiries()
+      }
 
-  // Refresh LTP when expiry changes
+      if (cancelled) return
+
+      if (!gotExpiries) {
+        setInitError('No expiry data found. Master contract may not be loaded yet.')
+        setIsInitializing(false)
+        return
+      }
+
+      setExpiries(loadedExpiries)
+      setExpiry(loadedExpiries[0])
+      setIsLoadingExpiries(false)
+
+      // Step 2: Get LTP + lot size using the just-loaded expiry
+      try {
+        const expiryFormatted = convertExpiryToSymbol(loadedExpiries[0])
+        const resp = await optionChainApi.getOptionSymbol(
+          apiKey, underlying, indexExchange, expiryFormatted, 'ATM', 'CE'
+        )
+        if (cancelled) return
+        if (resp.status === 'success' && resp.underlying_ltp) {
+          setSpotLtp(resp.underlying_ltp)
+          const atm = Math.round(resp.underlying_ltp / strikeGap) * strikeGap
+          setAtmStrike(atm)
+          setStrikeOffset(0)
+          if (resp.lotsize) {
+            setLotSizeMap((prev) => ({ ...prev, [underlying]: resp.lotsize! }))
+          }
+        } else {
+          setInitError(resp.message || 'Failed to fetch LTP')
+        }
+      } catch {
+        if (!cancelled) setInitError('Failed to fetch LTP')
+      }
+
+      if (!cancelled) {
+        initDoneRef.current = true
+        setIsInitializing(false)
+      }
+    }
+
+    initialize()
+
+    return () => {
+      cancelled = true
+      if (retryTimer) clearTimeout(retryTimer)
+    }
+  }, [apiKey, underlying, initTrigger]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Note: Only re-run on apiKey, underlying change, or manual retry. Other deps are derived from these.
+
+  // Refresh LTP when user manually changes expiry via dropdown (not during init)
   useEffect(() => {
-    if (expiry) {
+    if (expiry && initDoneRef.current) {
       refreshLtp()
     }
-  }, [expiry, refreshLtp])
+  }, [expiry]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-refresh positions periodically
   useEffect(() => {
@@ -407,6 +476,29 @@ function ScalperTerminal() {
       if (priceTimerRef.current) clearInterval(priceTimerRef.current)
     }
   }, [])
+
+  // ==================== Lot Selection ====================
+
+  const handleLotPreset = useCallback((n: number) => {
+    setLots(n)
+    setCustomLots('')
+  }, [])
+
+  const handleCustomLots = useCallback((val: string) => {
+    setCustomLots(val)
+    const n = parseInt(val)
+    if (n && n > 0) setLots(n)
+  }, [])
+
+  // Smart refresh: reloads everything if no data yet, otherwise just refreshes LTP + lot size
+  const handleRefresh = useCallback(async () => {
+    if (expiries.length === 0 || !expiry) {
+      // No data — re-trigger the initialization effect
+      setInitTrigger((prev) => prev + 1)
+    } else {
+      await refreshLtp()
+    }
+  }, [expiries.length, expiry, refreshLtp])
 
   // ==================== Keyboard Shortcuts ====================
 
@@ -438,7 +530,7 @@ function ScalperTerminal() {
           break
         case 'r':
           e.preventDefault()
-          refreshLtp()
+          handleRefresh()
           break
         case 'ArrowLeft':
           e.preventDefault()
@@ -469,20 +561,7 @@ function ScalperTerminal() {
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [placeOrder, exitAllPositions, refreshLtp])
-
-  // ==================== Lot Selection ====================
-
-  const handleLotPreset = useCallback((n: number) => {
-    setLots(n)
-    setCustomLots('')
-  }, [])
-
-  const handleCustomLots = useCallback((val: string) => {
-    setCustomLots(val)
-    const n = parseInt(val)
-    if (n && n > 0) setLots(n)
-  }, [])
+  }, [placeOrder, exitAllPositions, handleRefresh])
 
   // ==================== Computed ====================
 
@@ -498,6 +577,36 @@ function ScalperTerminal() {
   )
 
   // ==================== Render ====================
+
+  // Show initialization loading state
+  if (isInitializing && !initDoneRef.current) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <Zap className="h-5 w-5 text-primary" />
+          <h1 className="text-2xl font-bold">Scalper Terminal</h1>
+        </div>
+        <Card>
+          <CardContent className="p-8">
+            <div className="flex flex-col items-center justify-center gap-3">
+              <RefreshCw className="h-8 w-8 animate-spin text-primary" />
+              <p className="text-sm text-muted-foreground">
+                {isLoadingExpiries ? 'Loading expiry dates...' : isRefreshingLtp ? 'Fetching market data...' : 'Initializing...'}
+              </p>
+              {initError && (
+                <div className="text-center mt-2">
+                  <p className="text-sm text-destructive">{initError}</p>
+                  <Button variant="outline" size="sm" className="mt-2" onClick={handleRefresh}>
+                    <RefreshCw className="h-4 w-4 mr-1" /> Retry
+                  </Button>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
   return (
     <TooltipProvider>
@@ -589,11 +698,11 @@ function ScalperTerminal() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={refreshLtp}
-                disabled={isRefreshingLtp}
+                onClick={handleRefresh}
+                disabled={isRefreshingLtp || isLoadingExpiries}
                 className="h-9"
               >
-                <RefreshCw className={cn('h-4 w-4 mr-1', isRefreshingLtp && 'animate-spin')} />
+                <RefreshCw className={cn('h-4 w-4 mr-1', (isRefreshingLtp || isLoadingExpiries) && 'animate-spin')} />
                 Refresh
               </Button>
             </div>

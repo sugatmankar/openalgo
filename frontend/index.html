@@ -10,6 +10,32 @@
     <title>OpenAlgo</title>
   </head>
   <body>
+    <!-- Inline script to prevent theme flash (FOUC) on page load.
+         Reads Zustand persist state from localStorage and applies
+         the correct CSS class BEFORE React renders. -->
+    <script>
+      ;(function () {
+        try {
+          var raw = localStorage.getItem('openalgo-theme')
+          if (raw) {
+            var parsed = JSON.parse(raw)
+            var state = parsed && parsed.state
+            if (state) {
+              if (state.appMode === 'analyzer') {
+                document.documentElement.classList.add('analyzer')
+              } else if (state.mode === 'dark') {
+                document.documentElement.classList.add('dark')
+              }
+              if (state.color) {
+                document.documentElement.setAttribute('data-theme', state.color)
+              }
+            }
+          }
+        } catch (e) {
+          // Ignore parse errors — React will handle theme on hydration
+        }
+      })()
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
