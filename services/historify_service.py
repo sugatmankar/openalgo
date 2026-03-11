@@ -522,7 +522,7 @@ def get_data_catalog() -> tuple[bool, dict[str, Any], int]:
     try:
         catalog = db_get_data_catalog()
 
-        # Convert timestamps to readable dates
+        # Convert timestamps to readable dates and ensure JSON-serializable types
         for item in catalog:
             if item.get("first_timestamp"):
                 item["first_date"] = datetime.fromtimestamp(item["first_timestamp"]).strftime(
@@ -532,6 +532,9 @@ def get_data_catalog() -> tuple[bool, dict[str, Any], int]:
                 item["last_date"] = datetime.fromtimestamp(item["last_timestamp"]).strftime(
                     "%Y-%m-%d"
                 )
+            # Convert pandas Timestamp or other non-serializable types to string
+            if item.get("last_download_at") is not None:
+                item["last_download_at"] = str(item["last_download_at"])
 
         return True, {"status": "success", "data": catalog, "count": len(catalog)}, 200
 
