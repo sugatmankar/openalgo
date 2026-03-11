@@ -855,7 +855,8 @@ export default function Historify() {
     if (query.length < 2) return
     try {
       const params = new URLSearchParams({ q: query })
-      if (newExchange) params.append('exchange', newExchange)
+      // Don't filter by exchange during search - search across all exchanges
+      // The exchange will be auto-set when user clicks a result
       const response = await fetch(`/search/api/search?${params}`, { credentials: 'include' })
       const data = await response.json()
       setSearchResults((data.results || []).slice(0, 10))

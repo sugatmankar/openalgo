@@ -185,7 +185,8 @@ def api_search():
         ]
 
     logger.debug(f"API search found {len(results_dicts)} results")
-    return jsonify({"results": results_dicts})
+    # Limit results for API response to prevent large payloads
+    return jsonify({"results": results_dicts[:50]})
 
 
 @search_bp.route("/api/expiries")
