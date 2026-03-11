@@ -540,7 +540,7 @@ export default function HistorifyCharts() {
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-64 p-0" align="start">
-              <Command>
+              <Command shouldFilter={false}>
                 <CommandInput
                   placeholder="Search symbols..."
                   value={symbolSearch}
