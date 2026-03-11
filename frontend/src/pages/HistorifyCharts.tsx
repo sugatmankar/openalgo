@@ -4,6 +4,7 @@ import {
   BookOpen,
   Calendar,
   Database,
+  Download,
   Home,
   Loader2,
   LogOut,
@@ -124,6 +125,12 @@ export default function HistorifyCharts() {
   const [symbolSearchOpen, setSymbolSearchOpen] = useState(false)
   const [symbolSearch, setSymbolSearch] = useState('')
 
+  // Broker search state
+  const [brokerResults, setBrokerResults] = useState<{ symbol: string; exchange: string; name?: string }[]>([])
+  const [isSearchingBroker, setIsSearchingBroker] = useState(false)
+  const [isDownloading, setIsDownloading] = useState(false)
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   // Custom interval state
   const [isCustomInterval, setIsCustomInterval] = useState(false)
   const [customIntervalValue, setCustomIntervalValue] = useState('25')
@@ -192,7 +199,7 @@ export default function HistorifyCharts() {
     return Array.from(symbolMap.values())
   }, [catalog])
 
-  // Filtered symbols for search
+  // Filtered symbols for search (catalog only)
   const filteredSymbols = useMemo(() => {
     if (!symbolSearch) return uniqueSymbols
     const search = symbolSearch.toLowerCase()
@@ -200,6 +207,34 @@ export default function HistorifyCharts() {
       (s) => s.symbol.toLowerCase().includes(search) || s.exchange.toLowerCase().includes(search)
     )
   }, [uniqueSymbols, symbolSearch])
+
+  // Debounced broker search when typing in symbol picker
+  useEffect(() => {
+    if (!symbolSearch || symbolSearch.length < 2) {
+      setBrokerResults([])
+      return
+    }
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current)
+    searchTimeoutRef.current = setTimeout(async () => {
+      setIsSearchingBroker(true)
+      try {
+        const params = new URLSearchParams({ q: symbolSearch })
+        const response = await fetch(`/search/api/search?${params}`, { credentials: 'include' })
+        const data = await response.json()
+        // Filter out symbols already in catalog
+        const catalogKeys = new Set(uniqueSymbols.map((s) => `${s.symbol}:${s.exchange}`))
+        const results = (data.results || []).filter(
+          (r: { symbol: string; exchange: string }) => !catalogKeys.has(`${r.symbol}:${r.exchange}`)
+        )
+        setBrokerResults(results.slice(0, 20))
+      } catch {
+        setBrokerResults([])
+      } finally {
+        setIsSearchingBroker(false)
+      }
+    }, 300)
+    return () => { if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current) }
+  }, [symbolSearch, uniqueSymbols])
 
   // Load catalog on mount
   useEffect(() => {
@@ -478,11 +513,57 @@ export default function HistorifyCharts() {
     setDataInfo(info || null)
   }, [catalog, selectedSymbol, selectedExchange, selectedInterval])
 
-  const handleSymbolSelect = (symbol: string, exchange: string) => {
+  // Helper to fetch CSRF token for POST requests
+  const fetchCSRFToken = async (): Promise<string> => {
+    const response = await fetch('/auth/csrf-token', { credentials: 'include' })
+    const data = await response.json()
+    return data.csrf_token
+  }
+
+  // Auto-download 1m data for a symbol then load chart
+  const autoDownloadAndChart = async (symbol: string, exchange: string) => {
+    setIsDownloading(true)
+    showToast.info(`Downloading 1m data for ${symbol}:${exchange}...`, 'historify')
+    try {
+      const csrfToken = await fetchCSRFToken()
+      const response = await fetch('/historify/api/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+        credentials: 'include',
+        body: JSON.stringify({
+          symbol,
+          exchange,
+          interval: '1m',
+          start_date: startDate,
+          end_date: endDate,
+        }),
+      })
+      const data = await response.json()
+      if (data.status === 'success') {
+        showToast.success(`Downloaded ${data.records?.toLocaleString() || 0} records for ${symbol}`, 'historify')
+        // Refresh catalog so it shows up next time
+        loadCatalog()
+      } else {
+        showToast.error(data.message || 'Failed to download data', 'historify')
+      }
+    } catch {
+      showToast.error('Failed to download data', 'historify')
+    } finally {
+      setIsDownloading(false)
+    }
+  }
+
+  const handleSymbolSelect = async (symbol: string, exchange: string, fromBroker: boolean = false) => {
     setSelectedSymbol(symbol)
     setSelectedExchange(exchange)
     setSymbolSearchOpen(false)
     setSymbolSearch('')
+    setBrokerResults([])
+
+    // If selected from broker search (not in catalog), auto-download first
+    if (fromBroker) {
+      await autoDownloadAndChart(symbol, exchange)
+    }
   }
 
   const toggleFullscreen = () => {
@@ -528,43 +609,86 @@ export default function HistorifyCharts() {
           {/* Symbol Selector */}
           <Popover open={symbolSearchOpen} onOpenChange={setSymbolSearchOpen}>
             <PopoverTrigger asChild>
-              <Button variant="outline" className="w-64 justify-between">
-                {selectedSymbol ? (
+              <Button variant="outline" className="w-72 justify-between" disabled={isDownloading}>
+                {isDownloading ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Downloading...
+                  </span>
+                ) : selectedSymbol ? (
                   <span>
                     {selectedSymbol}:{selectedExchange}
                   </span>
                 ) : (
-                  <span className="text-muted-foreground">Select symbol...</span>
+                  <span className="text-muted-foreground">Search any symbol...</span>
                 )}
                 <Search className="h-4 w-4 ml-2" />
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-64 p-0" align="start">
+            <PopoverContent className="w-80 p-0" align="start">
               <Command shouldFilter={false}>
                 <CommandInput
-                  placeholder="Search symbols..."
+                  placeholder="Search symbols (e.g. NIFTY17MAR2624100CE)..."
                   value={symbolSearch}
                   onValueChange={setSymbolSearch}
                 />
                 <CommandList>
-                  <CommandEmpty>No symbols found</CommandEmpty>
-                  <CommandGroup>
-                    {filteredSymbols.slice(0, 20).map((s) => (
-                      <CommandItem
-                        key={`${s.symbol}:${s.exchange}`}
-                        value={`${s.symbol}:${s.exchange}`}
-                        onSelect={() => handleSymbolSelect(s.symbol, s.exchange)}
-                      >
-                        <span className="font-medium">{s.symbol}</span>
-                        <Badge variant="outline" className="ml-2 text-[10px]">
-                          {s.exchange}
-                        </Badge>
-                        <span className="text-xs text-muted-foreground ml-auto">
-                          {s.intervals.length} intervals
-                        </span>
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
+                  <CommandEmpty>
+                    {isSearchingBroker ? (
+                      <div className="flex items-center justify-center gap-2 py-2">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span>Searching broker...</span>
+                      </div>
+                    ) : (
+                      'No symbols found. Type to search broker contracts.'
+                    )}
+                  </CommandEmpty>
+                  {/* Catalog results (already downloaded) */}
+                  {filteredSymbols.length > 0 && (
+                    <CommandGroup heading="Downloaded Data">
+                      {filteredSymbols.slice(0, 15).map((s) => (
+                        <CommandItem
+                          key={`catalog:${s.symbol}:${s.exchange}`}
+                          value={`catalog:${s.symbol}:${s.exchange}`}
+                          onSelect={() => handleSymbolSelect(s.symbol, s.exchange)}
+                        >
+                          <Database className="h-3 w-3 mr-1.5 text-green-500" />
+                          <span className="font-medium text-sm">{s.symbol}</span>
+                          <Badge variant="outline" className="ml-2 text-[10px]">
+                            {s.exchange}
+                          </Badge>
+                          <span className="text-xs text-muted-foreground ml-auto">
+                            {s.intervals.length} tf
+                          </span>
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  )}
+                  {/* Broker search results (not yet downloaded) */}
+                  {brokerResults.length > 0 && (
+                    <CommandGroup heading="Broker Contracts (will auto-download)">
+                      {brokerResults.slice(0, 15).map((r) => (
+                        <CommandItem
+                          key={`broker:${r.symbol}:${r.exchange}`}
+                          value={`broker:${r.symbol}:${r.exchange}`}
+                          onSelect={() => handleSymbolSelect(r.symbol, r.exchange, true)}
+                        >
+                          <Download className="h-3 w-3 mr-1.5 text-blue-500" />
+                          <span className="font-medium text-sm">{r.symbol}</span>
+                          <Badge variant="outline" className="ml-2 text-[10px]">
+                            {r.exchange}
+                          </Badge>
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  )}
+                  {/* Loading indicator */}
+                  {isSearchingBroker && (filteredSymbols.length > 0 || brokerResults.length > 0) && (
+                    <div className="flex items-center justify-center gap-2 py-2 text-xs text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Searching broker...
+                    </div>
+                  )}
                 </CommandList>
               </Command>
             </PopoverContent>
