@@ -791,6 +791,144 @@ def is_daily_aggregated_interval(interval: str) -> bool:
     return parsed["type"] in ("weekly", "monthly", "quarterly", "yearly")
 
 
+def _parse_rolling_symbol(symbol: str) -> dict | None:
+    """
+    Parse a rolling option virtual symbol into rolling_option_data query params.
+    E.g. 'NIFTY_ROLL_ATM+4_CE_WEEK' -> {symbol: 'NIFTY', strike_label: 'ATM+4', side: 'CE'}
+    Pattern: {UNDERLYING}_ROLL_{STRIKE_LABEL}_{SIDE}_WEEK
+    """
+    import re
+    match = re.match(r'^(.+)_ROLL_(ATM[+-]?\d*)_(CE|PE)_WEEK$', symbol, re.IGNORECASE)
+    if match:
+        return {
+            'underlying': match.group(1).upper(),
+            'strike_label': match.group(2).upper(),
+            'side': match.group(3).upper(),
+        }
+    return None
+
+
+def _has_rolling_option_table() -> bool:
+    """Check if rolling_option_data table exists in DuckDB."""
+    try:
+        with get_connection() as conn:
+            result = conn.execute(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'rolling_option_data'"
+            ).fetchone()
+            return result[0] > 0
+    except Exception:
+        return False
+
+
+def _get_rolling_option_ohlcv(
+    symbol: str,
+    strike_label: str,
+    side: str,
+    interval: str,
+    start_timestamp: int | None = None,
+    end_timestamp: int | None = None,
+) -> pd.DataFrame:
+    """
+    Query rolling_option_data table for a specific strike/side combo.
+    Returns DataFrame with columns: timestamp, open, high, low, close, volume, oi
+    """
+    try:
+        query = """
+            SELECT timestamp, open, high, low, close, volume, oi
+            FROM rolling_option_data
+            WHERE symbol = ? AND strike_label = ? AND side = ? AND interval = ?
+        """
+        params = [symbol.upper(), strike_label.upper(), side.upper(), interval]
+
+        if start_timestamp:
+            query += " AND timestamp >= ?"
+            params.append(start_timestamp)
+
+        if end_timestamp:
+            query += " AND timestamp <= ?"
+            params.append(end_timestamp)
+
+        query += " ORDER BY timestamp ASC"
+
+        with get_connection() as conn:
+            result = conn.execute(query, params).fetchdf()
+
+        return result
+
+    except Exception as e:
+        logger.exception(f"Error fetching rolling option data: {e}")
+        return pd.DataFrame()
+
+
+def _get_rolling_option_aggregated_ohlcv(
+    symbol: str,
+    strike_label: str,
+    side: str,
+    target_interval: str,
+    exchange: str = "NFO",
+    start_timestamp: int | None = None,
+    end_timestamp: int | None = None,
+) -> pd.DataFrame:
+    """
+    Aggregate rolling_option_data from 1m to higher timeframes.
+    Same logic as _get_aggregated_ohlcv but for rolling_option_data table.
+    """
+    try:
+        minutes = INTERVAL_MINUTES.get(target_interval)
+        if minutes is None:
+            parsed = parse_interval(target_interval)
+            if parsed and parsed["type"] == "intraday":
+                minutes = parsed["minutes"]
+            else:
+                logger.error(f"Cannot aggregate rolling option to interval: {target_interval}")
+                return pd.DataFrame()
+
+        interval_seconds = minutes * 60
+        market_open_seconds = _get_market_open_seconds(exchange)
+        ist_offset = 19800
+
+        query = f"""
+            SELECT
+                (FLOOR((timestamp + {ist_offset}) / 86400) * 86400 - {ist_offset}) +
+                {market_open_seconds} +
+                FLOOR((((timestamp + {ist_offset}) % 86400) - {market_open_seconds}) / {interval_seconds}) * {interval_seconds}
+                as timestamp,
+                FIRST(open ORDER BY timestamp) as open,
+                MAX(high) as high,
+                MIN(low) as low,
+                LAST(close ORDER BY timestamp) as close,
+                SUM(volume) as volume,
+                LAST(oi ORDER BY timestamp) as oi
+            FROM rolling_option_data
+            WHERE symbol = ? AND strike_label = ? AND side = ? AND interval = '1m'
+        """
+        params = [symbol.upper(), strike_label.upper(), side.upper()]
+
+        if start_timestamp:
+            query += " AND timestamp >= ?"
+            params.append(start_timestamp)
+
+        if end_timestamp:
+            query += " AND timestamp <= ?"
+            params.append(end_timestamp)
+
+        query += f"""
+            GROUP BY (FLOOR((timestamp + {ist_offset}) / 86400) * 86400 - {ist_offset}) +
+                     {market_open_seconds} +
+                     FLOOR((((timestamp + {ist_offset}) % 86400) - {market_open_seconds}) / {interval_seconds}) * {interval_seconds}
+            ORDER BY timestamp ASC
+        """
+
+        with get_connection() as conn:
+            result = conn.execute(query, params).fetchdf()
+
+        return result
+
+    except Exception as e:
+        logger.exception(f"Error aggregating rolling option data: {e}")
+        return pd.DataFrame()
+
+
 def get_ohlcv(
     symbol: str,
     exchange: str,
@@ -830,6 +968,25 @@ def get_ohlcv(
 
         # Check if this is an intraday computed interval (standard or custom)
         if interval in COMPUTED_INTERVALS or is_custom_interval(interval):
+            # Check if this is a rolling option symbol not in market_data
+            rolling = _parse_rolling_symbol(symbol)
+            if rolling and _has_rolling_option_table():
+                # Check if symbol exists in market_data first
+                with get_connection() as conn:
+                    exists_in_md = conn.execute(
+                        "SELECT COUNT(*) FROM market_data WHERE symbol = ? AND exchange = ? AND interval = '1m' LIMIT 1",
+                        [symbol.upper(), exchange.upper()]
+                    ).fetchone()[0]
+                if not exists_in_md:
+                    return _get_rolling_option_aggregated_ohlcv(
+                        symbol=rolling['underlying'],
+                        strike_label=rolling['strike_label'],
+                        side=rolling['side'],
+                        target_interval=interval,
+                        exchange=exchange,
+                        start_timestamp=start_timestamp,
+                        end_timestamp=end_timestamp,
+                    )
             return _get_aggregated_ohlcv(
                 symbol=symbol,
                 exchange=exchange,
@@ -858,6 +1015,19 @@ def get_ohlcv(
 
         with get_connection() as conn:
             result = conn.execute(query, params).fetchdf()
+
+        # If no data in market_data, check rolling_option_data
+        if result.empty:
+            rolling = _parse_rolling_symbol(symbol)
+            if rolling and _has_rolling_option_table():
+                result = _get_rolling_option_ohlcv(
+                    symbol=rolling['underlying'],
+                    strike_label=rolling['strike_label'],
+                    side=rolling['side'],
+                    interval=interval,
+                    start_timestamp=start_timestamp,
+                    end_timestamp=end_timestamp,
+                )
 
         return result
 
@@ -1193,6 +1363,51 @@ def sync_data_catalog() -> int:
                   AND data_catalog.exchange = sub.exchange
                   AND data_catalog.interval = sub.interval
             """)
+
+            # Also sync rolling_option_data (creates virtual symbols)
+            try:
+                has_rolling = conn.execute(
+                    "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'rolling_option_data'"
+                ).fetchone()[0]
+                if has_rolling:
+                    rolling_combos = conn.execute("""
+                        SELECT symbol, strike_label, side, interval,
+                               MIN(timestamp) as first_ts, MAX(timestamp) as last_ts,
+                               COUNT(*) as cnt
+                        FROM rolling_option_data
+                        GROUP BY symbol, strike_label, side, interval
+                        HAVING COUNT(*) > 1
+                    """).fetchall()
+
+                    for row in rolling_combos:
+                        underlying, strike_label, side, interval, first_ts, last_ts, cnt = row
+                        virtual_symbol = f"{underlying}_ROLL_{strike_label}_{side}_WEEK"
+                        # Check if already in catalog (from market_data or previous sync)
+                        exists = conn.execute(
+                            "SELECT COUNT(*) FROM data_catalog WHERE symbol = ? AND exchange = 'NFO' AND interval = ?",
+                            [virtual_symbol, interval]
+                        ).fetchone()[0]
+                        if not exists:
+                            next_id = conn.execute(
+                                "SELECT COALESCE(MAX(id), 0) + 1 FROM data_catalog"
+                            ).fetchone()[0]
+                            conn.execute("""
+                                INSERT INTO data_catalog
+                                (id, symbol, exchange, interval, first_timestamp, last_timestamp,
+                                 record_count, last_download_at)
+                                VALUES (?, ?, 'NFO', ?, ?, ?, ?, current_timestamp)
+                            """, [next_id, virtual_symbol, interval, first_ts, last_ts, cnt])
+                            added += 1
+                        else:
+                            # Update existing entry
+                            conn.execute("""
+                                UPDATE data_catalog SET
+                                    first_timestamp = ?, last_timestamp = ?,
+                                    record_count = ?, last_download_at = current_timestamp
+                                WHERE symbol = ? AND exchange = 'NFO' AND interval = ?
+                            """, [first_ts, last_ts, cnt, virtual_symbol, interval])
+            except Exception as e:
+                logger.warning(f"Could not sync rolling_option_data to catalog: {e}")
 
             if added > 0:
                 logger.info(f"Synced data_catalog: added {added} new entries")
