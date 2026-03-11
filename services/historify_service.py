@@ -492,7 +492,12 @@ def get_chart_data(
             )
 
         # Convert to list of dicts for JSON response
+        # Use orient="records" and convert numpy types to Python native for JSON serialization
         data = df.to_dict("records")
+        for row in data:
+            for k, v in row.items():
+                if hasattr(v, "item"):  # numpy scalar → Python native
+                    row[k] = v.item()
 
         return (
             True,
@@ -522,8 +527,14 @@ def get_data_catalog() -> tuple[bool, dict[str, Any], int]:
     try:
         catalog = db_get_data_catalog()
 
-        # Convert timestamps to readable dates and ensure JSON-serializable types
+        # Convert timestamps to readable dates and ensure ALL values are JSON-serializable
+        # DuckDB/pandas returns numpy int64/float64 which are NOT JSON-serializable
         for item in catalog:
+            # Convert all numeric fields from numpy types to Python native types
+            for key in ("first_timestamp", "last_timestamp", "record_count", "id"):
+                if key in item and item[key] is not None:
+                    item[key] = int(item[key])
+
             if item.get("first_timestamp"):
                 item["first_date"] = datetime.fromtimestamp(item["first_timestamp"]).strftime(
                     "%Y-%m-%d"
@@ -535,6 +546,10 @@ def get_data_catalog() -> tuple[bool, dict[str, Any], int]:
             # Convert pandas Timestamp or other non-serializable types to string
             if item.get("last_download_at") is not None:
                 item["last_download_at"] = str(item["last_download_at"])
+            # Ensure string fields are native Python str
+            for key in ("symbol", "exchange", "interval"):
+                if key in item and item[key] is not None:
+                    item[key] = str(item[key])
 
         return True, {"status": "success", "data": catalog, "count": len(catalog)}, 200
 
