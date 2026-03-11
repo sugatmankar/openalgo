@@ -83,11 +83,21 @@ interface BrokerFieldConfig {
   required?: boolean
 }
 
+// Broker-specific hints for the API Key field
+const BROKER_API_KEY_HINTS: Record<string, string> = {
+  dhan: 'Format: clientcode:::apikey (e.g. 1100184496:::b45649b9-xxxx-xxxx)',
+  flattrade: 'Format: userid:::apikey',
+}
+
 const BROKER_EXTRA_FIELDS: Record<string, BrokerFieldConfig[]> = {
   angel: [
     { label: 'Client ID', field: 'user_id', placeholder: 'Angel One Client ID', required: true },
     { label: 'PIN', field: 'password', type: 'password', placeholder: 'Trading PIN', required: true },
     { label: 'TOTP Key', field: 'totp_key', type: 'password', placeholder: 'TOTP secret (for auto-auth)' },
+  ],
+  dhan: [
+    { label: 'Dhan PIN', field: 'password', type: 'password', placeholder: '6-digit Dhan PIN', required: true },
+    { label: 'TOTP Key', field: 'totp_key', type: 'password', placeholder: 'TOTP secret (for auto-auth)', required: true },
   ],
   fivepaisa: [
     { label: 'Client ID / Email', field: 'user_id', placeholder: 'Client ID or Email', required: true },
@@ -663,12 +673,17 @@ export default function BrokerAccounts() {
               <Label htmlFor="broker_api_key">Broker API Key *</Label>
               <Input
                 id="broker_api_key"
-                placeholder="Enter broker API key"
+                placeholder={BROKER_API_KEY_HINTS[formData.broker] ? BROKER_API_KEY_HINTS[formData.broker].replace('Format: ', '') : 'Enter broker API key'}
                 value={formData.broker_api_key}
                 onChange={(e) =>
                   setFormData({ ...formData, broker_api_key: e.target.value })
                 }
               />
+              {formData.broker && BROKER_API_KEY_HINTS[formData.broker] && (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  {BROKER_API_KEY_HINTS[formData.broker]}
+                </p>
+              )}
             </div>
 
             <div className="grid gap-2">
@@ -852,6 +867,11 @@ export default function BrokerAccounts() {
                   })
                 }
               />
+              {editingAccount?.broker && BROKER_API_KEY_HINTS[editingAccount.broker] && (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  {BROKER_API_KEY_HINTS[editingAccount.broker]}
+                </p>
+              )}
               {editingAccount?.broker_api_key && (
                 <p className="text-xs text-muted-foreground">
                   Current: {editingAccount.broker_api_key}

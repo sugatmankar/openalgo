@@ -306,7 +306,6 @@ def authenticate_account(account_id):
         # Note: flattrade, upstox, zerodha support both OAuth and TOTP.
         # They fall through to auto-TOTP below if credentials are available.
         oauth_only_brokers = {
-            "dhan",
             "compositedge", "paytm", "pocketful",
         }
 
@@ -327,7 +326,7 @@ def authenticate_account(account_id):
 
         # For brokers that support both OAuth and TOTP: if auto-auth fields
         # are present, use TOTP; otherwise fall back to OAuth
-        if not can_auto_auth and broker in ("zerodha", "upstox", "flattrade"):
+        if not can_auto_auth and broker in ("zerodha", "upstox", "flattrade", "dhan"):
             redirect_url = account.get("redirect_url") or ""
             api_key = account["broker_api_key"]
             auth_url = _get_oauth_url(broker, api_key, redirect_url)
@@ -611,6 +610,7 @@ def _set_account_env(account):
 # Broker field requirements for auto-auth
 BROKER_AUTO_AUTH_FIELDS = {
     "angel": ["user_id", "password", "totp_key"],         # clientcode, pin, totp
+    "dhan": ["password", "totp_key"],                     # pin, totp (direct API)
     "fivepaisa": ["user_id", "password", "totp_key"],     # clientcode, pin, totp
     "firstock": ["user_id", "password", "totp_key"],      # userid, password, totp
     "flattrade": ["user_id", "password", "totp_key"],     # userid, password, totp
@@ -717,6 +717,12 @@ def _auto_authenticate_totp(account_id, user, broker, account):
                 from broker.fyers.api.auth_api import authenticate_broker_totp
                 auth_token, error_message = authenticate_broker_totp(
                     account["user_id"], account["password"], totp_code
+                )
+
+            elif broker == "dhan":
+                from broker.dhan.api.auth_api import authenticate_broker_totp as dhan_totp
+                auth_token, error_message = dhan_totp(
+                    account["password"], totp_code
                 )
 
             elif broker == "flattrade":

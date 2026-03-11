@@ -247,6 +247,66 @@ def get_catalog():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@historify_bp.route("/api/catalog/sync", methods=["POST"])
+@check_session_validity
+def sync_catalog():
+    """Sync data_catalog with actual market_data."""
+    try:
+        from database.historify_db import sync_data_catalog
+
+        added = sync_data_catalog()
+        return jsonify({
+            "status": "success",
+            "message": f"Synced catalog: {added} new entries added",
+            "added": added
+        }), 200
+    except Exception as e:
+        logger.error(f"Error syncing catalog: {e}")
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@historify_bp.route("/api/catalog/search", methods=["GET"])
+@check_session_validity
+def search_catalog():
+    """Search data_catalog for symbols matching a query."""
+    try:
+        query = request.args.get("q", "").strip().upper()
+        if not query or len(query) < 2:
+            return jsonify({"status": "success", "data": []}), 200
+
+        from database.historify_db import get_data_catalog
+
+        catalog = get_data_catalog()
+        # Filter catalog entries matching the query
+        matches = [
+            {
+                "symbol": item["symbol"],
+                "exchange": item["exchange"],
+                "interval": item.get("interval", ""),
+                "record_count": item.get("record_count", 0),
+                "first_timestamp": item.get("first_timestamp"),
+                "last_timestamp": item.get("last_timestamp"),
+            }
+            for item in catalog
+            if query in item.get("symbol", "").upper()
+        ]
+        # Deduplicate by symbol+exchange (may have multiple intervals)
+        seen = set()
+        unique_matches = []
+        for m in matches:
+            key = f"{m['symbol']}:{m['exchange']}"
+            if key not in seen:
+                seen.add(key)
+                unique_matches.append(m)
+
+        return jsonify({"status": "success", "data": unique_matches[:50]}), 200
+    except Exception as e:
+        logger.error(f"Error searching catalog: {e}")
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @historify_bp.route("/api/symbol-info", methods=["GET"])
 @check_session_validity
 def get_symbol_info():

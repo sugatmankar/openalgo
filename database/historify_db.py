@@ -1139,9 +1139,74 @@ def _get_daily_aggregated_ohlcv(
         return pd.DataFrame()
 
 
+def sync_data_catalog() -> int:
+    """
+    Synchronize data_catalog with actual market_data.
+    Finds symbol/exchange/interval combos in market_data that are missing from
+    data_catalog and inserts them. Also updates existing entries with current counts.
+
+    Returns:
+        Number of new catalog entries added
+    """
+    try:
+        with get_connection() as conn:
+            # Find combos in market_data that are missing from data_catalog
+            missing = conn.execute("""
+                SELECT m.symbol, m.exchange, m.interval,
+                       MIN(m.timestamp) as first_ts, MAX(m.timestamp) as last_ts,
+                       COUNT(*) as cnt
+                FROM market_data m
+                LEFT JOIN data_catalog c
+                    ON m.symbol = c.symbol AND m.exchange = c.exchange AND m.interval = c.interval
+                WHERE c.id IS NULL
+                GROUP BY m.symbol, m.exchange, m.interval
+            """).fetchall()
+
+            added = 0
+            for row in missing:
+                symbol, exchange, interval, first_ts, last_ts, cnt = row
+                next_id = conn.execute(
+                    "SELECT COALESCE(MAX(id), 0) + 1 FROM data_catalog"
+                ).fetchone()[0]
+                conn.execute("""
+                    INSERT INTO data_catalog
+                    (id, symbol, exchange, interval, first_timestamp, last_timestamp,
+                     record_count, last_download_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, current_timestamp)
+                """, [next_id, symbol, exchange, interval, first_ts, last_ts, cnt])
+                added += 1
+
+            # Update existing entries with current counts
+            conn.execute("""
+                UPDATE data_catalog SET
+                    first_timestamp = sub.first_ts,
+                    last_timestamp = sub.last_ts,
+                    record_count = sub.cnt
+                FROM (
+                    SELECT symbol, exchange, interval,
+                           MIN(timestamp) as first_ts, MAX(timestamp) as last_ts,
+                           COUNT(*) as cnt
+                    FROM market_data
+                    GROUP BY symbol, exchange, interval
+                ) sub
+                WHERE data_catalog.symbol = sub.symbol
+                  AND data_catalog.exchange = sub.exchange
+                  AND data_catalog.interval = sub.interval
+            """)
+
+            if added > 0:
+                logger.info(f"Synced data_catalog: added {added} new entries")
+            return added
+
+    except Exception as e:
+        logger.exception(f"Error syncing data catalog: {e}")
+        return 0
+
+
 def get_data_catalog() -> list[dict[str, Any]]:
     """
     Get summary of all available data in the database.
+    Auto-syncs catalog from market_data if catalog is empty but data exists.
 
     Returns:
         List of dictionaries with symbol, exchange, interval, and data range info
@@ -1158,7 +1223,26 @@ def get_data_catalog() -> list[dict[str, Any]]:
             """).fetchdf()
 
         if result.empty:
-            return []
+            # Auto-sync: check if market_data has data but catalog is empty
+            with get_connection() as conn:
+                has_data = conn.execute(
+                    "SELECT COUNT(*) FROM market_data LIMIT 1"
+                ).fetchone()[0]
+            if has_data > 0:
+                logger.info("data_catalog is empty but market_data has data, syncing...")
+                sync_data_catalog()
+                # Re-fetch after sync
+                with get_connection() as conn:
+                    result = conn.execute("""
+                        SELECT
+                            symbol, exchange, interval,
+                            first_timestamp, last_timestamp,
+                            record_count, last_download_at
+                        FROM data_catalog
+                        ORDER BY exchange, symbol, interval
+                    """).fetchdf()
+                if result.empty:
+                    return []
 
         return result.to_dict("records")
 

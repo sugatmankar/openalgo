@@ -854,12 +854,36 @@ export default function Historify() {
   const performSearch = async (query: string) => {
     if (query.length < 2) return
     try {
+      // Search local catalog first (includes rolling option symbols from DuckDB)
+      const upperQuery = query.toUpperCase()
+      const catalogResults: SearchResult[] = groupedCatalog
+        .filter((item) => item.symbol.toUpperCase().includes(upperQuery))
+        .slice(0, 5)
+        .map((item) => ({
+          symbol: item.symbol,
+          name: `${item.symbol} (${item.total_records.toLocaleString()} records)`,
+          exchange: item.exchange,
+          token: '',
+        }))
+
+      // Also search broker master contracts
       const params = new URLSearchParams({ q: query })
-      // Don't filter by exchange during search - search across all exchanges
-      // The exchange will be auto-set when user clicks a result
       const response = await fetch(`/search/api/search?${params}`, { credentials: 'include' })
       const data = await response.json()
-      setSearchResults((data.results || []).slice(0, 10))
+      const apiResults: SearchResult[] = (data.results || []).slice(0, 10)
+
+      // Merge: catalog results first (deduplicated), then API results
+      const seen = new Set<string>()
+      const merged: SearchResult[] = []
+      for (const r of [...catalogResults, ...apiResults]) {
+        const key = `${r.symbol}:${r.exchange}`
+        if (!seen.has(key)) {
+          seen.add(key)
+          merged.push(r)
+        }
+      }
+
+      setSearchResults(merged.slice(0, 15))
       setShowSearchResults(true)
     } catch (error) {
       setSearchResults([])
