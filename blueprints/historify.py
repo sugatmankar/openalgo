@@ -266,6 +266,25 @@ def sync_catalog():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@historify_bp.route("/api/strikes/search", methods=["GET"])
+@check_session_validity
+def search_strikes():
+    """Search individual option strikes in rolling_option_data."""
+    try:
+        from database.historify_db import search_rolling_strikes
+
+        query = request.args.get("q", "").strip()
+        if not query or len(query) < 3:
+            return jsonify({"status": "success", "data": []}), 200
+
+        results = search_rolling_strikes(query, limit=30)
+        return jsonify({"status": "success", "data": results}), 200
+    except Exception as e:
+        logger.error(f"Error searching strikes: {e}")
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @historify_bp.route("/api/catalog/search", methods=["GET"])
 @check_session_validity
 def search_catalog():

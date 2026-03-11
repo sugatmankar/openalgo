@@ -820,6 +820,195 @@ def _has_rolling_option_table() -> bool:
         return False
 
 
+def _parse_strike_symbol(symbol: str) -> dict | None:
+    """
+    Parse an individual strike virtual symbol into query params.
+    E.g. 'NIFTY_24100_CE' -> {underlying: 'NIFTY', strike_price: 24100.0, side: 'CE'}
+    """
+    import re
+    match = re.match(r'^(.+)_(\d+)_(CE|PE)$', symbol, re.IGNORECASE)
+    if match:
+        return {
+            'underlying': match.group(1).upper(),
+            'strike_price': float(match.group(2)),
+            'side': match.group(3).upper(),
+        }
+    return None
+
+
+def search_rolling_strikes(query: str, limit: int = 30) -> list[dict]:
+    """
+    Search rolling_option_data for individual strikes matching a query.
+    Supports: '24100', '24100CE', '24100 CE', 'NIFTY24100CE', 'NIFTY10MAR2624100CE'
+    Returns list of {symbol, strike_price, side, record_count, first_timestamp, last_timestamp}
+    """
+    import re
+    if not _has_rolling_option_table():
+        return []
+
+    try:
+        strike_price = None
+        side_filter = None
+
+        query_upper = query.strip().upper()
+
+        # Try: pure number like '24100'
+        if query_upper.isdigit():
+            strike_price = float(query_upper)
+        else:
+            # Try: extract strike+side from patterns like:
+            # 'NIFTY24100CE', 'NIFTY10MAR2624100CE', '24100CE', '24100 CE'
+            match = re.search(r'(\d{4,6})\s*(CE|PE)?$', query_upper)
+            if match:
+                strike_price = float(match.group(1))
+                side_filter = match.group(2)
+
+        if strike_price is None:
+            return []
+
+        with get_connection() as conn:
+            if side_filter:
+                rows = conn.execute("""
+                    SELECT strike_price, side, COUNT(*) as cnt,
+                           MIN(timestamp) as min_ts, MAX(timestamp) as max_ts
+                    FROM rolling_option_data
+                    WHERE strike_price BETWEEN ? AND ?
+                      AND side = ?
+                    GROUP BY strike_price, side
+                    HAVING COUNT(*) >= 10
+                    ORDER BY ABS(strike_price - ?) ASC
+                    LIMIT ?
+                """, [strike_price - 500, strike_price + 500, side_filter,
+                       strike_price, limit]).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT strike_price, side, COUNT(*) as cnt,
+                           MIN(timestamp) as min_ts, MAX(timestamp) as max_ts
+                    FROM rolling_option_data
+                    WHERE strike_price BETWEEN ? AND ?
+                    GROUP BY strike_price, side
+                    HAVING COUNT(*) >= 10
+                    ORDER BY ABS(strike_price - ?) ASC, side ASC
+                    LIMIT ?
+                """, [strike_price - 500, strike_price + 500,
+                       strike_price, limit]).fetchall()
+
+        results = []
+        for r in rows:
+            sp = int(r[0]) if r[0] == int(r[0]) else r[0]
+            results.append({
+                'symbol': f'NIFTY_{sp}_{r[1]}',
+                'display': f'NIFTY {sp} {r[1]}',
+                'strike_price': sp,
+                'side': r[1],
+                'record_count': int(r[2]),
+                'first_timestamp': int(r[3]),
+                'last_timestamp': int(r[4]),
+            })
+        return results
+    except Exception as e:
+        logger.exception(f"Error searching rolling strikes: {e}")
+        return []
+
+
+def _get_strike_ohlcv(
+    strike_price: float,
+    side: str,
+    interval: str = '1m',
+    start_timestamp: int | None = None,
+    end_timestamp: int | None = None,
+) -> pd.DataFrame:
+    """
+    Get OHLCV data for a specific strike_price+side from rolling_option_data.
+    """
+    try:
+        query = """
+            SELECT timestamp, open, high, low, close, volume, oi
+            FROM rolling_option_data
+            WHERE strike_price = ? AND side = ? AND interval = ?
+        """
+        params = [strike_price, side.upper(), interval]
+
+        if start_timestamp:
+            query += " AND timestamp >= ?"
+            params.append(start_timestamp)
+        if end_timestamp:
+            query += " AND timestamp <= ?"
+            params.append(end_timestamp)
+        query += " ORDER BY timestamp ASC"
+
+        with get_connection() as conn:
+            result = conn.execute(query, params).fetchdf()
+        return result
+    except Exception as e:
+        logger.exception(f"Error fetching strike OHLCV: {e}")
+        return pd.DataFrame()
+
+
+def _get_strike_aggregated_ohlcv(
+    strike_price: float,
+    side: str,
+    target_interval: str,
+    exchange: str = 'NFO',
+    start_timestamp: int | None = None,
+    end_timestamp: int | None = None,
+) -> pd.DataFrame:
+    """
+    Aggregate rolling_option_data from 1m to higher timeframes for a specific strike.
+    """
+    try:
+        minutes = INTERVAL_MINUTES.get(target_interval)
+        if minutes is None:
+            parsed = parse_interval(target_interval)
+            if parsed and parsed['type'] == 'intraday':
+                minutes = parsed['minutes']
+            else:
+                logger.error(f"Cannot aggregate strike to interval: {target_interval}")
+                return pd.DataFrame()
+
+        interval_seconds = minutes * 60
+        market_open_seconds = _get_market_open_seconds(exchange)
+        ist_offset = 19800
+
+        query = f"""
+            SELECT
+                (FLOOR((timestamp + {ist_offset}) / 86400) * 86400 - {ist_offset}) +
+                {market_open_seconds} +
+                FLOOR((((timestamp + {ist_offset}) % 86400) - {market_open_seconds}) / {interval_seconds}) * {interval_seconds}
+                as timestamp,
+                FIRST(open ORDER BY timestamp) as open,
+                MAX(high) as high,
+                MIN(low) as low,
+                LAST(close ORDER BY timestamp) as close,
+                SUM(volume) as volume,
+                LAST(oi ORDER BY timestamp) as oi
+            FROM rolling_option_data
+            WHERE strike_price = ? AND side = ? AND interval = '1m'
+        """
+        params = [strike_price, side.upper()]
+
+        if start_timestamp:
+            query += " AND timestamp >= ?"
+            params.append(start_timestamp)
+        if end_timestamp:
+            query += " AND timestamp <= ?"
+            params.append(end_timestamp)
+
+        query += f"""
+            GROUP BY (FLOOR((timestamp + {ist_offset}) / 86400) * 86400 - {ist_offset}) +
+                     {market_open_seconds} +
+                     FLOOR((((timestamp + {ist_offset}) % 86400) - {market_open_seconds}) / {interval_seconds}) * {interval_seconds}
+            ORDER BY timestamp ASC
+        """
+
+        with get_connection() as conn:
+            result = conn.execute(query, params).fetchdf()
+        return result
+    except Exception as e:
+        logger.exception(f"Error aggregating strike data: {e}")
+        return pd.DataFrame()
+
+
 def _get_rolling_option_ohlcv(
     symbol: str,
     strike_label: str,
@@ -956,6 +1145,27 @@ def get_ohlcv(
         DataFrame with columns: timestamp, open, high, low, close, volume, oi
     """
     try:
+        # Check if this is an individual strike symbol (e.g. NIFTY_24100_CE)
+        strike = _parse_strike_symbol(symbol)
+        if strike and _has_rolling_option_table():
+            if interval == '1m':
+                return _get_strike_ohlcv(
+                    strike_price=strike['strike_price'],
+                    side=strike['side'],
+                    interval='1m',
+                    start_timestamp=start_timestamp,
+                    end_timestamp=end_timestamp,
+                )
+            else:
+                return _get_strike_aggregated_ohlcv(
+                    strike_price=strike['strike_price'],
+                    side=strike['side'],
+                    target_interval=interval,
+                    exchange=exchange,
+                    start_timestamp=start_timestamp,
+                    end_timestamp=end_timestamp,
+                )
+
         # Check if this is a daily-aggregated interval (W, MO, Q, Y)
         if is_daily_aggregated_interval(interval):
             return _get_daily_aggregated_ohlcv(

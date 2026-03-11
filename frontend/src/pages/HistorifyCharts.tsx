@@ -131,6 +131,11 @@ export default function HistorifyCharts() {
   const [isDownloading, setIsDownloading] = useState(false)
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Strike search state (individual option strikes from rolling data)
+  const [strikeResults, setStrikeResults] = useState<{ symbol: string; display: string; strike_price: number; side: string; record_count: number }[]>([])
+  const [isSearchingStrikes, setIsSearchingStrikes] = useState(false)
+  const strikeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   // Custom interval state
   const [isCustomInterval, setIsCustomInterval] = useState(false)
   const [customIntervalValue, setCustomIntervalValue] = useState('25')
@@ -235,6 +240,34 @@ export default function HistorifyCharts() {
     }, 300)
     return () => { if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current) }
   }, [symbolSearch, uniqueSymbols])
+
+  // Debounced strike search in rolling_option_data
+  useEffect(() => {
+    if (!symbolSearch || symbolSearch.length < 3) {
+      setStrikeResults([])
+      return
+    }
+    // Only search if query contains a digit (likely a strike price or option name)
+    if (!/\d/.test(symbolSearch)) {
+      setStrikeResults([])
+      return
+    }
+    if (strikeTimeoutRef.current) clearTimeout(strikeTimeoutRef.current)
+    strikeTimeoutRef.current = setTimeout(async () => {
+      setIsSearchingStrikes(true)
+      try {
+        const params = new URLSearchParams({ q: symbolSearch })
+        const response = await fetch(`/historify/api/strikes/search?${params}`, { credentials: 'include' })
+        const data = await response.json()
+        setStrikeResults(data.data || [])
+      } catch {
+        setStrikeResults([])
+      } finally {
+        setIsSearchingStrikes(false)
+      }
+    }, 300)
+    return () => { if (strikeTimeoutRef.current) clearTimeout(strikeTimeoutRef.current) }
+  }, [symbolSearch])
 
   // Load catalog on mount
   useEffect(() => {
@@ -628,19 +661,19 @@ export default function HistorifyCharts() {
             <PopoverContent className="w-80 p-0" align="start">
               <Command shouldFilter={false}>
                 <CommandInput
-                  placeholder="Search symbols (e.g. NIFTY17MAR2624100CE)..."
+                  placeholder="Search symbol or strike (e.g. 24100CE)..."
                   value={symbolSearch}
                   onValueChange={setSymbolSearch}
                 />
                 <CommandList>
                   <CommandEmpty>
-                    {isSearchingBroker ? (
+                    {isSearchingBroker || isSearchingStrikes ? (
                       <div className="flex items-center justify-center gap-2 py-2">
                         <Loader2 className="h-4 w-4 animate-spin" />
-                        <span>Searching broker...</span>
+                        <span>Searching...</span>
                       </div>
                     ) : (
-                      'No symbols found. Type to search broker contracts.'
+                      'No symbols found. Try typing a strike price like 24100 or option name.'
                     )}
                   </CommandEmpty>
                   {/* Catalog results (already downloaded) */}
@@ -659,6 +692,27 @@ export default function HistorifyCharts() {
                           </Badge>
                           <span className="text-xs text-muted-foreground ml-auto">
                             {s.intervals.length} tf
+                          </span>
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  )}
+                  {/* Historical option strikes from rolling data */}
+                  {strikeResults.length > 0 && (
+                    <CommandGroup heading="Historical Option Strikes">
+                      {strikeResults.slice(0, 20).map((r) => (
+                        <CommandItem
+                          key={`strike:${r.symbol}`}
+                          value={`strike:${r.symbol}`}
+                          onSelect={() => handleSymbolSelect(r.symbol, 'NFO')}
+                        >
+                          <Zap className="h-3 w-3 mr-1.5 text-amber-500" />
+                          <span className="font-medium text-sm">{r.display}</span>
+                          <Badge variant="outline" className="ml-2 text-[10px]">
+                            NFO
+                          </Badge>
+                          <span className="text-xs text-muted-foreground ml-auto">
+                            {r.record_count.toLocaleString()} bars
                           </span>
                         </CommandItem>
                       ))}
@@ -683,10 +737,10 @@ export default function HistorifyCharts() {
                     </CommandGroup>
                   )}
                   {/* Loading indicator */}
-                  {isSearchingBroker && (filteredSymbols.length > 0 || brokerResults.length > 0) && (
+                  {(isSearchingBroker || isSearchingStrikes) && (filteredSymbols.length > 0 || brokerResults.length > 0 || strikeResults.length > 0) && (
                     <div className="flex items-center justify-center gap-2 py-2 text-xs text-muted-foreground">
                       <Loader2 className="h-3 w-3 animate-spin" />
-                      Searching broker...
+                      Searching...
                     </div>
                   )}
                 </CommandList>
