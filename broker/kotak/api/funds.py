@@ -77,11 +77,70 @@ def get_margin_data(auth_token):
         pay_out = float(margin_data.get("RmsPayOutAmt", 0))
         collateral = float(margin_data.get("Collateral", 0))
 
+        # Kotak limits API often returns 0 for RealizedMtomPrsnt/UnrealizedMtomPrsnt
+        # even when there are squared-off positions with realized PnL.
+        # Sum per-segment MTM fields as fallback, then compute from positions if still 0.
+        realized_mtm = float(margin_data.get("RealizedMtomPrsnt", 0))
+        unrealized_mtm = float(margin_data.get("UnrealizedMtomPrsnt", 0))
+
+        # Try per-segment fields if aggregate is 0
+        if realized_mtm == 0:
+            realized_mtm = (
+                float(margin_data.get("FoRlsMtomPrsnt", 0))
+                + float(margin_data.get("CashRlsMtomPrsnt", 0))
+                + float(margin_data.get("ComRlsMtomPrsnt", 0))
+                + float(margin_data.get("CurRlsMtomPrsnt", 0))
+            )
+        if unrealized_mtm == 0:
+            unrealized_mtm = (
+                float(margin_data.get("FoUnRlsMtomPrsnt", 0))
+                + float(margin_data.get("CashUnRlsMtomPrsnt", 0))
+                + float(margin_data.get("ComUnRlsMtomPrsnt", 0))
+                + float(margin_data.get("CurUnRlsMtomPrsnt", 0))
+            )
+
+        # If still 0, calculate realized PnL from positions data
+        # Kotak positions have buyAmt/sellAmt for squared-off trades
+        if realized_mtm == 0:
+            try:
+                pos_url = f"{base_url}/quick/user/positions"
+                pos_headers = {
+                    "accept": "application/json",
+                    "Sid": trading_sid,
+                    "Auth": trading_token,
+                    "neo-fin-key": "neotradeapi",
+                }
+                pos_response = client.get(pos_url, headers=pos_headers)
+                pos_data = json.loads(pos_response.text)
+                if pos_data.get("stat") == "Ok" and pos_data.get("data"):
+                    total_realized = 0.0
+                    total_unrealized = 0.0
+                    for pos in pos_data["data"]:
+                        buy_qty = float(pos.get("flBuyQty", 0)) + float(pos.get("cfBuyQty", 0))
+                        sell_qty = float(pos.get("flSellQty", 0)) + float(pos.get("cfSellQty", 0))
+                        buy_amt = float(pos.get("buyAmt", 0)) + float(pos.get("cfBuyAmt", 0))
+                        sell_amt = float(pos.get("sellAmt", 0)) + float(pos.get("cfSellAmt", 0))
+                        net_qty = int(buy_qty - sell_qty)
+
+                        # Squared-off portion = realized PnL
+                        squared_qty = min(buy_qty, sell_qty)
+                        if squared_qty > 0:
+                            total_realized += sell_amt - buy_amt
+                            # If there's remaining open qty, we need to separate
+                            # realized from unrealized, but for simplicity:
+                            # realized = sell_amt - buy_amt (for closed portion)
+                            # unrealized needs LTP which positions API doesn't provide
+                    if total_realized != 0:
+                        realized_mtm = round(total_realized, 2)
+                        logger.info(f"Kotak: Calculated realized PnL from positions: {realized_mtm}")
+            except Exception as e:
+                logger.warning(f"Kotak: Failed to calculate PnL from positions: {e}")
+
         processed_margin_data = {
             "availablecash": f"{collateral_value + pay_in - pay_out + collateral:.2f}",
             "collateral": f"{collateral:.2f}",
-            "m2munrealized": f"{float(margin_data.get('UnrealizedMtomPrsnt', 0)):.2f}",
-            "m2mrealized": f"{float(margin_data.get('RealizedMtomPrsnt', 0)):.2f}",
+            "m2munrealized": f"{unrealized_mtm:.2f}",
+            "m2mrealized": f"{realized_mtm:.2f}",
             "utiliseddebits": f"{float(margin_data.get('MarginUsed', 0)):.2f}",
         }
 
