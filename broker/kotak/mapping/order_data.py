@@ -224,6 +224,32 @@ def map_position_data(position_data):
 
 
 def transform_positions_data(positions_data):
+    # Kotak Neo API does NOT return LTP in positions data
+    # Fetch LTP via multiquotes service (same pattern as Dhan broker)
+    ltp_map = {}
+    if positions_data:
+        try:
+            from database.auth_db import ApiKeys, decrypt_token
+            from services.quotes_service import get_multiquotes
+
+            api_key_obj = ApiKeys.query.first()
+            if api_key_obj:
+                api_key = decrypt_token(api_key_obj.api_key_encrypted)
+                symbols_payload = [
+                    {"symbol": pos.get("trdSym", ""), "exchange": pos.get("exSeg", "")}
+                    for pos in positions_data
+                    if pos.get("trdSym") and pos.get("exSeg")
+                ]
+                if symbols_payload:
+                    success, response, _ = get_multiquotes(symbols=symbols_payload, api_key=api_key)
+                    if success and "results" in response:
+                        for result in response["results"]:
+                            if "data" in result and result["data"]:
+                                key = f"{result['exchange']}:{result['symbol']}"
+                                ltp_map[key] = float(result["data"].get("ltp", 0))
+        except Exception as e:
+            logger.warning(f"Kotak: Failed to fetch LTP via multiquotes: {e}")
+
     transformed_data = []
     for position in positions_data:
         buy_qty = float(position.get("flBuyQty", 0)) + float(position.get("cfBuyQty", 0))
@@ -233,6 +259,19 @@ def transform_positions_data(positions_data):
         buy_amt = float(position.get("buyAmt", 0)) + float(position.get("cfBuyAmt", 0))
         sell_amt = float(position.get("sellAmt", 0)) + float(position.get("cfSellAmt", 0))
 
+        symbol = position.get("trdSym", "")
+        exchange = position.get("exSeg", "")
+        ltp = ltp_map.get(f"{exchange}:{symbol}", 0.0)
+
+        # Kotak multiplier/gen/prc factors (needed for currency derivatives etc.)
+        # For equity and standard F&O these are all 1
+        multiplier = float(position.get("multiplier", 1))
+        gen_num = float(position.get("genNum", 1))
+        gen_den = float(position.get("genDen", 1))
+        prc_num = float(position.get("prcNum", 1))
+        prc_den = float(position.get("prcDen", 1))
+        ltp_factor = multiplier * (gen_num / gen_den) * (prc_num / prc_den) if gen_den and prc_den else 1.0
+
         # Calculate average price based on net position direction
         if net_qty > 0 and buy_qty > 0:
             avg_price = round(buy_amt / buy_qty, 2)
@@ -241,16 +280,20 @@ def transform_positions_data(positions_data):
         else:
             avg_price = 0.0
 
-        # Realized PnL = sellAmt - buyAmt (for squared-off qty)
-        realized_pnl = round(sell_amt - buy_amt, 2)
+        # Total PnL = realized + unrealized (per Kotak Neo v2 docs)
+        # Formula: (sell_amt - buy_amt) + (net_qty * ltp * multiplier * genNum/genDen * prcNum/prcDen)
+        # For closed positions (net_qty=0): pure realized = sell_amt - buy_amt
+        # For open positions: includes mark-to-market via net_qty * ltp * factor
+        total_pnl = round((sell_amt - buy_amt) + (net_qty * ltp * ltp_factor), 2)
 
         transformed_position = {
-            "symbol": position.get("trdSym", ""),
-            "exchange": position.get("exSeg", ""),
+            "symbol": symbol,
+            "exchange": exchange,
             "product": position.get("prod", ""),
             "quantity": net_qty,
             "average_price": avg_price,
-            "pnl": realized_pnl,
+            "ltp": round(ltp, 2),
+            "pnl": total_pnl,
         }
 
         transformed_data.append(transformed_position)
