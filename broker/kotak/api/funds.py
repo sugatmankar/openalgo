@@ -112,7 +112,7 @@ def get_margin_data(auth_token):
                 }
                 pos_response = client.get(pos_url, headers=pos_headers)
                 pos_data = json.loads(pos_response.text)
-                if pos_data.get("stat") == "Ok" and pos_data.get("data"):
+                if pos_data.get("data"):
                     total_realized = 0.0
                     total_unrealized = 0.0
                     for pos in pos_data["data"]:
