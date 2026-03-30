@@ -162,9 +162,18 @@ def authenticate_broker_totp(
     if not redirect_url:
         return None, "Missing REDIRECT_URL — required for Fyers auto-TOTP authentication"
 
-    client = get_httpx_client()
+    # Use a DEDICATED httpx client with cookie persistence for the entire auth flow.
+    # Fyers -200 (User Apps / static IP) needs cookies from the login steps
+    # to be passed to generate-authcode to get the redirect with auth_code.
+    import httpx
+    with httpx.Client(timeout=30.0, follow_redirects=False) as client:
+      try:
+        # Log cookies throughout to debug -200 flow
+        def _log_cookies(label):
+            jar = dict(client.cookies)
+            if jar:
+                logger.info(f"Fyers cookies after {label}: {list(jar.keys())}")
 
-    try:
         # Step 1: Send login OTP
         res1 = client.post(
             f"{FYERS_AUTH_HOST}/send_login_otp_v2",
@@ -173,6 +182,7 @@ def authenticate_broker_totp(
         )
         res1_data = res1.json()
         logger.debug(f"Fyers send_login_otp response status: {res1_data.get('s')}")
+        _log_cookies("send_login_otp")
 
         if "request_key" not in res1_data:
             return None, f"Fyers login OTP failed: {res1_data.get('message', str(res1_data))}"
@@ -185,6 +195,7 @@ def authenticate_broker_totp(
         )
         res2_data = res2.json()
         logger.debug(f"Fyers verify_otp response status: {res2_data.get('s')}")
+        _log_cookies("verify_otp")
 
         if "request_key" not in res2_data:
             return None, f"Fyers TOTP verification failed: {res2_data.get('message', str(res2_data))}"
@@ -201,6 +212,7 @@ def authenticate_broker_totp(
         )
         res3_data = res3.json()
         logger.debug(f"Fyers verify_pin response status: {res3_data.get('s')}")
+        _log_cookies("verify_pin")
 
         data_block = res3_data.get("data", {})
         bearer_token = data_block.get("access_token") if isinstance(data_block, dict) else None
@@ -208,8 +220,6 @@ def authenticate_broker_totp(
             return None, f"Fyers PIN verification failed: {res3_data.get('message', str(res3_data))}"
 
         # Step 4: Get authorization code
-        # Fyers API key format: "APPID-100" or "APPID-101" (static IP apps)
-        # Extract app_id prefix and appType suffix dynamically
         if "-" in broker_api_key:
             app_prefix = broker_api_key.rsplit("-", 1)[0]
             app_type = broker_api_key.rsplit("-", 1)[1]
@@ -218,8 +228,6 @@ def authenticate_broker_totp(
             app_type = "100"
 
         logger.info(f"Fyers app_id={app_prefix}, appType={app_type}")
-
-        # Use account redirect_url or fall back to env
         callback_url = redirect_url
 
         token_payload = {
@@ -240,10 +248,10 @@ def authenticate_broker_totp(
             json=token_payload,
             headers={"Authorization": f"Bearer {bearer_token}"},
             timeout=30.0,
-            follow_redirects=False,
         )
+        _log_cookies("token_endpoint")
         logger.info(f"Fyers token HTTP status: {res4.status_code}, Location: {res4.headers.get('Location', 'none')}")
-        
+
         # Check if the token endpoint itself redirected with auth_code
         if res4.status_code in (301, 302, 303, 307, 308):
             location = res4.headers.get("Location", "")
@@ -256,28 +264,11 @@ def authenticate_broker_totp(
                     logger.info(f"Fyers: got auth_code from token redirect! (length={len(auth_code)})")
                     access_token, resp_data = authenticate_broker(auth_code)
                     if access_token:
-                        logger.info("Fyers: SUCCESS! access_token obtained via token endpoint redirect")
+                        logger.info("Fyers: SUCCESS via token endpoint redirect")
                         return access_token, None
-                    else:
-                        err_msg = resp_data.get("message", "exchange failed") if isinstance(resp_data, dict) else str(resp_data)
-                        logger.warning(f"Fyers: validate-authcode failed for redirect auth_code: {err_msg}")
-        
+
         res4_data = res4.json()
         logger.info(f"Fyers token response: status={res4_data.get('s')}, code={res4_data.get('code')}, keys={list(res4_data.keys())}")
-        # Log all top-level values (mask long strings)
-        for k, v in res4_data.items():
-            val_str = str(v)
-            if len(val_str) > 200:
-                val_str = val_str[:100] + f"...({len(val_str)} chars)"
-            logger.info(f"  Fyers token[{k}] = {val_str}")
-        # If data block exists, log its sub-keys too
-        data_block_raw = res4_data.get("data", {})
-        if isinstance(data_block_raw, dict):
-            for dk, dv in data_block_raw.items():
-                dval = str(dv)
-                if len(dval) > 200:
-                    dval = dval[:100] + f"...({len(dval)} chars)"
-                logger.info(f"  Fyers token.data[{dk}] = {dval}")
 
         # Legacy flow for -100 apps: extract auth_code from "Url" field
         url_str = res4_data.get("Url")
@@ -295,7 +286,7 @@ def authenticate_broker_totp(
                     return None, err_msg
 
         # For static IP apps (-200): token response returns data.auth JWT
-        # We need to follow the redirect to get the actual auth_code
+        # With cookie persistence, generate-authcode should now redirect properly
         data_block = res4_data.get("data", {})
         if isinstance(data_block, dict) and data_block.get("auth"):
             auth_jwt = data_block["auth"]
@@ -309,16 +300,16 @@ def authenticate_broker_totp(
                 "state": "None",
             }
 
-            # Method 1: GET generate-authcode with Bearer JWT (no redirect follow)
+            # Method 1: GET generate-authcode with cookies from login flow
             try:
                 gen_resp = client.get(
                     generate_url,
                     params=auth_params,
                     headers={"Authorization": f"Bearer {auth_jwt}"},
-                    follow_redirects=False,
                     timeout=30.0,
                 )
                 logger.info(f"Fyers GET generate-authcode: status={gen_resp.status_code}")
+                _log_cookies("generate_authcode_GET")
                 if gen_resp.status_code in (301, 302, 303, 307, 308):
                     location = gen_resp.headers.get("Location", "")
                     logger.info(f"Fyers GET redirect Location: {location[:200]}")
@@ -327,7 +318,7 @@ def authenticate_broker_totp(
                         qs_loc = parse_qs(parsed_loc.query)
                         auth_code = qs_loc.get("auth_code", [None])[0]
                         if auth_code:
-                            logger.info(f"Fyers: got auth_code from GET redirect (length={len(auth_code)})")
+                            logger.info(f"Fyers: got auth_code from GET redirect!")
                             access_token, resp_data = authenticate_broker(auth_code)
                             if access_token:
                                 logger.info("Fyers: SUCCESS via GET generate-authcode redirect")
@@ -338,65 +329,27 @@ def authenticate_broker_totp(
             except Exception as e:
                 logger.warning(f"Fyers GET generate-authcode failed: {e}")
 
-            # Method 2: POST generate-authcode with Bearer JWT
+            # Method 2: Try data.auth as access token (client_id:token format)
             try:
-                gen_resp_post = client.post(
-                    generate_url,
-                    json=auth_params,
-                    headers={"Authorization": f"Bearer {auth_jwt}"},
-                    follow_redirects=False,
-                    timeout=30.0,
+                test_resp = client.get(
+                    "https://api-t1.fyers.in/api/v3/profile",
+                    headers={"Authorization": f"{broker_api_key}:{auth_jwt}"},
+                    timeout=10.0,
                 )
-                logger.info(f"Fyers POST generate-authcode: status={gen_resp_post.status_code}")
-                if gen_resp_post.status_code in (301, 302, 303, 307, 308):
-                    location = gen_resp_post.headers.get("Location", "")
-                    logger.info(f"Fyers POST redirect Location: {location[:200]}")
-                    if "auth_code=" in location:
-                        parsed_loc = urlparse(location)
-                        qs_loc = parse_qs(parsed_loc.query)
-                        auth_code = qs_loc.get("auth_code", [None])[0]
-                        if auth_code:
-                            logger.info(f"Fyers: got auth_code from POST redirect (length={len(auth_code)})")
-                            access_token, resp_data = authenticate_broker(auth_code)
-                            if access_token:
-                                logger.info("Fyers: SUCCESS via POST generate-authcode redirect")
-                                return access_token, None
-                else:
-                    try:
-                        gen_json = gen_resp_post.json()
-                        logger.info(f"Fyers POST generate-authcode JSON: {gen_json}")
-                    except Exception:
-                        logger.info(f"Fyers POST generate-authcode body: {gen_resp_post.text[:300]}")
-            except Exception as e:
-                logger.warning(f"Fyers POST generate-authcode failed: {e}")
-
-            # Method 3: Try data.auth as access token with different header formats
-            test_headers_formats = [
-                (f"{broker_api_key}:{auth_jwt}", "client_id:token"),
-                (f"Bearer {auth_jwt}", "Bearer token"),
-                (auth_jwt, "raw JWT"),
-            ]
-            for test_header, desc in test_headers_formats:
-                try:
-                    test_resp = client.get(
-                        "https://api-t1.fyers.in/api/v3/profile",
-                        headers={"Authorization": test_header},
-                        timeout=10.0,
-                    )
-                    test_body = test_resp.json()
-                    logger.info(f"Fyers profile test ({desc}): status={test_resp.status_code}, s={test_body.get('s')}, code={test_body.get('code')}")
-                    if test_body.get("s") == "ok" or test_body.get("code") == 200:
-                        logger.info(f"Fyers: ACCESS TOKEN WORKS with format: {desc}")
-                        return auth_jwt, None
-                except Exception as te:
-                    logger.warning(f"Fyers profile test ({desc}) failed: {te}")
+                test_body = test_resp.json()
+                logger.info(f"Fyers profile test: status={test_resp.status_code}, s={test_body.get('s')}, code={test_body.get('code')}")
+                if test_body.get("s") == "ok" or test_body.get("code") == 200:
+                    logger.info("Fyers: data.auth WORKS as access token!")
+                    return auth_jwt, None
+            except Exception as te:
+                logger.warning(f"Fyers profile test failed: {te}")
 
             # None worked — return JWT as fallback
-            logger.warning("Fyers: data.auth JWT did not work with any header format")
+            logger.warning("Fyers: data.auth JWT did not work, returning as fallback")
             return auth_jwt, None
 
         return None, f"Fyers auth code generation failed: {res4_data.get('message', str(res4_data))}"
 
-    except Exception as e:
+      except Exception as e:
         logger.exception(f"Fyers auto-TOTP authentication failed: {e}")
         return None, f"Fyers auto-TOTP error: {str(e)}"
