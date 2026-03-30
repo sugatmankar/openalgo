@@ -268,8 +268,6 @@ def authenticate_broker_totp(
             return access_token, None
 
         return None, f"Fyers auth code generation failed: {res4_data.get('message', str(res4_data))}"
-            err_msg = resp_data.get("message", "Token exchange failed") if isinstance(resp_data, dict) else str(resp_data)
-            return None, err_msg
 
     except Exception as e:
         logger.exception(f"Fyers auto-TOTP authentication failed: {e}")
