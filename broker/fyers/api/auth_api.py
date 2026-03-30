@@ -273,22 +273,63 @@ def authenticate_broker_totp(
                     err_msg = resp_data.get("message", "Token exchange failed") if isinstance(resp_data, dict) else str(resp_data)
                     return None, err_msg
 
-        # For static IP apps (-200): token response returns data.auth
-        # This is an authorization code — exchange it via validate-authcode
+        # For static IP apps (-200): token response returns data.auth JWT
+        # We need to follow the redirect to get the actual auth_code
         data_block = res4_data.get("data", {})
         if isinstance(data_block, dict) and data_block.get("auth"):
-            auth_code_200 = data_block["auth"]
-            logger.info(f"Fyers: got data.auth for static IP flow (length={len(auth_code_200)})")
-            access_token, resp_data = authenticate_broker(auth_code_200)
-            if access_token:
-                logger.info("Fyers: successfully exchanged data.auth for access_token via validate-authcode")
-                return access_token, None
-            else:
-                err_detail = resp_data.get("message", "unknown") if isinstance(resp_data, dict) else str(resp_data)
-                logger.warning(f"Fyers: validate-authcode failed for data.auth: {err_detail}")
-                # Fall back to using data.auth directly (may not work for API calls)
-                logger.info("Fyers: falling back to data.auth as access token")
-                return auth_code_200, None
+            auth_jwt = data_block["auth"]
+            redirect_url_from_resp = data_block.get("redirectUrl", callback_url)
+            logger.info(f"Fyers: got data.auth JWT for static IP flow (length={len(auth_jwt)})")
+
+            # Method 1: Construct the generate-authcode URL and follow the redirect
+            # The auth JWT needs to be sent to generate-authcode which will redirect
+            # to our callback with ?auth_code=XXX
+            generate_url = f"https://api-t1.fyers.in/api/v3/generate-authcode"
+            auth_params = {
+                "client_id": broker_api_key,
+                "redirect_uri": callback_url,
+                "response_type": "code",
+                "state": "None",
+            }
+            try:
+                # Make GET request with auth JWT as Bearer token, don't follow redirect
+                gen_resp = client.get(
+                    generate_url,
+                    params=auth_params,
+                    headers={"Authorization": f"Bearer {auth_jwt}"},
+                    follow_redirects=False,
+                    timeout=30.0,
+                )
+                logger.info(f"Fyers generate-authcode: status={gen_resp.status_code}, headers={dict(gen_resp.headers)}")
+
+                # Check for redirect (302) with auth_code in Location header
+                if gen_resp.status_code in (301, 302, 303, 307, 308):
+                    location = gen_resp.headers.get("Location", "")
+                    logger.info(f"Fyers generate-authcode redirect: {location[:200]}")
+                    if "auth_code=" in location:
+                        from urllib.parse import parse_qs, urlparse
+                        parsed_loc = urlparse(location)
+                        qs_loc = parse_qs(parsed_loc.query)
+                        auth_code = qs_loc.get("auth_code", [None])[0]
+                        if auth_code:
+                            logger.info(f"Fyers: extracted auth_code from redirect (length={len(auth_code)})")
+                            access_token, resp_data = authenticate_broker(auth_code)
+                            if access_token:
+                                logger.info("Fyers: successfully got access_token via generate-authcode redirect flow")
+                                return access_token, None
+                            else:
+                                err_detail = resp_data.get("message", "unknown") if isinstance(resp_data, dict) else str(resp_data)
+                                logger.warning(f"Fyers: validate-authcode failed for redirect auth_code: {err_detail}")
+                else:
+                    # Maybe 200 response with auth_code in body?
+                    gen_body = gen_resp.text[:500]
+                    logger.info(f"Fyers generate-authcode body: {gen_body}")
+            except Exception as e:
+                logger.warning(f"Fyers generate-authcode approach failed: {e}")
+
+            # Method 2: data.auth might itself be usable as access token (fallback)
+            logger.info("Fyers: falling back to data.auth JWT as access token")
+            return auth_jwt, None
 
         return None, f"Fyers auth code generation failed: {res4_data.get('message', str(res4_data))}"
 
