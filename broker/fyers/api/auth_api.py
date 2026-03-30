@@ -208,8 +208,16 @@ def authenticate_broker_totp(
             return None, f"Fyers PIN verification failed: {res3_data.get('message', str(res3_data))}"
 
         # Step 4: Get authorization code
-        # app_id prefix: strip last 4 chars (e.g. "ABC1234-100" → "ABC1234")
-        app_prefix = broker_api_key[:-4] if len(broker_api_key) > 4 else broker_api_key
+        # Fyers API key format: "APPID-100" or "APPID-101" (static IP apps)
+        # Extract app_id prefix and appType suffix dynamically
+        if "-" in broker_api_key:
+            app_prefix = broker_api_key.rsplit("-", 1)[0]
+            app_type = broker_api_key.rsplit("-", 1)[1]
+        else:
+            app_prefix = broker_api_key[:-4] if len(broker_api_key) > 4 else broker_api_key
+            app_type = "100"
+
+        logger.debug(f"Fyers app_id={app_prefix}, appType={app_type}")
 
         # Use account redirect_url or fall back to env
         callback_url = redirect_url
@@ -218,7 +226,7 @@ def authenticate_broker_totp(
             "fyers_id": fy_id,
             "app_id": app_prefix,
             "redirect_uri": callback_url,
-            "appType": "100",
+            "appType": app_type,
             "code_challenge": "",
             "state": "None",
             "scope": "",
