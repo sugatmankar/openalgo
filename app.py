@@ -125,6 +125,7 @@ from blueprints.analyzer import analyzer_bp  # Import the analyzer blueprint
 from blueprints.apikey import api_key_bp
 from blueprints.auth import auth_bp
 from blueprints.brlogin import brlogin_bp
+from blueprints.broker_accounts import broker_accounts_bp  # Import broker accounts blueprint
 from blueprints.broker_credentials import (
     broker_credentials_bp,  # Import the broker credentials blueprint
 )
@@ -363,6 +364,7 @@ def create_app():
     app.register_blueprint(oiprofile_bp)  # Register OI Profile blueprint
     app.register_blueprint(flow_bp)  # Register Flow blueprint
     app.register_blueprint(broker_credentials_bp)  # Register Broker credentials blueprint
+    app.register_blueprint(broker_accounts_bp)  # Register Broker accounts blueprint
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
 
     # Exempt webhook endpoints from CSRF protection after app initialization
