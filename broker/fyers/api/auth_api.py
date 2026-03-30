@@ -259,53 +259,13 @@ def authenticate_broker_totp(
                     err_msg = resp_data.get("message", "Token exchange failed") if isinstance(resp_data, dict) else str(resp_data)
                     return None, err_msg
 
-        # For static IP apps (-200): no "Url" field. Use bearer token from step 3
-        # to call generate-authcode on Fyers, which redirects with auth_code.
-        # Then exchange auth_code via validate-authcode for the proper access token.
+        # For static IP apps (-200): token response returns data.auth directly
+        # which IS the access token for API calls
         data_block = res4_data.get("data", {})
-        if isinstance(data_block, dict) and res4_data.get("s") == "ok":
-            generate_url = (
-                f"https://api-t1.fyers.in/api/v3/generate-authcode"
-                f"?client_id={broker_api_key}"
-                f"&redirect_uri={callback_url}"
-                f"&response_type=code&state=None"
-            )
-            logger.info("Fyers static IP flow: calling generate-authcode with bearer token from step 3")
-
-            # Use cookies from token response if any, and bearer from step 3
-            res5 = client.get(
-                generate_url,
-                headers={
-                    "Authorization": f"Bearer {bearer_token}",
-                    "Cookie": f"FYERS_AUTH={bearer_token}",
-                },
-                follow_redirects=False,
-                timeout=30.0,
-            )
-            logger.info(f"Fyers generate-authcode: status={res5.status_code}")
-
-            if res5.status_code in (301, 302, 303, 307, 308):
-                location = res5.headers.get("location", "")
-                logger.info(f"Fyers generate-authcode location: {location[:300]}")
-                parsed_loc = urlparse(location)
-                qs_loc = parse_qs(parsed_loc.query)
-                auth_code = qs_loc.get("auth_code", [None])[0]
-                if auth_code:
-                    logger.info("Fyers: extracted auth_code from generate-authcode redirect")
-                    access_token, resp_data = authenticate_broker(auth_code)
-                    if access_token:
-                        return access_token, None
-                    else:
-                        err_msg = resp_data.get("message", "Token exchange failed") if isinstance(resp_data, dict) else str(resp_data)
-                        return None, err_msg
-                else:
-                    logger.warning(f"Fyers: redirect but no auth_code in location: {location[:300]}")
-            else:
-                try:
-                    body = res5.json()
-                    logger.info(f"Fyers generate-authcode body: {body}")
-                except Exception:
-                    logger.info(f"Fyers generate-authcode text: {res5.text[:500]}")
+        if isinstance(data_block, dict) and data_block.get("auth"):
+            access_token = data_block["auth"]
+            logger.info("Fyers: using data.auth as access token (static IP flow)")
+            return access_token, None
 
         return None, f"Fyers auth code generation failed: {res4_data.get('message', str(res4_data))}"
 
