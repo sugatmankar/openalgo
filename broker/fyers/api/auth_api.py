@@ -240,7 +240,28 @@ def authenticate_broker_totp(
             json=token_payload,
             headers={"Authorization": f"Bearer {bearer_token}"},
             timeout=30.0,
+            follow_redirects=False,
         )
+        logger.info(f"Fyers token HTTP status: {res4.status_code}, Location: {res4.headers.get('Location', 'none')}")
+        
+        # Check if the token endpoint itself redirected with auth_code
+        if res4.status_code in (301, 302, 303, 307, 308):
+            location = res4.headers.get("Location", "")
+            logger.info(f"Fyers token redirect: {location[:300]}")
+            if "auth_code=" in location:
+                parsed_loc = urlparse(location)
+                qs_loc = parse_qs(parsed_loc.query)
+                auth_code = qs_loc.get("auth_code", [None])[0]
+                if auth_code:
+                    logger.info(f"Fyers: got auth_code from token redirect! (length={len(auth_code)})")
+                    access_token, resp_data = authenticate_broker(auth_code)
+                    if access_token:
+                        logger.info("Fyers: SUCCESS! access_token obtained via token endpoint redirect")
+                        return access_token, None
+                    else:
+                        err_msg = resp_data.get("message", "exchange failed") if isinstance(resp_data, dict) else str(resp_data)
+                        logger.warning(f"Fyers: validate-authcode failed for redirect auth_code: {err_msg}")
+        
         res4_data = res4.json()
         logger.info(f"Fyers token response: status={res4_data.get('s')}, code={res4_data.get('code')}, keys={list(res4_data.keys())}")
         # Log all top-level values (mask long strings)
@@ -301,6 +322,39 @@ def authenticate_broker_totp(
                     timeout=30.0,
                 )
                 logger.info(f"Fyers generate-authcode: status={gen_resp.status_code}, headers={dict(gen_resp.headers)}")
+
+            # Method 1a: Try POST to generate-authcode with the JWT
+            try:
+                gen_resp_post = client.post(
+                    generate_url,
+                    json=auth_params,
+                    headers={"Authorization": f"Bearer {auth_jwt}", "Content-Type": "application/json"},
+                    follow_redirects=False,
+                    timeout=30.0,
+                )
+                logger.info(f"Fyers POST generate-authcode: status={gen_resp_post.status_code}")
+                if gen_resp_post.status_code in (301, 302, 303, 307, 308):
+                    location = gen_resp_post.headers.get("Location", "")
+                    logger.info(f"Fyers POST generate-authcode redirect: {location[:200]}")
+                    if "auth_code=" in location:
+                        parsed_loc = urlparse(location)
+                        qs_loc = parse_qs(parsed_loc.query)
+                        auth_code = qs_loc.get("auth_code", [None])[0]
+                        if auth_code:
+                            logger.info(f"Fyers: got auth_code from POST redirect (length={len(auth_code)})")
+                            access_token, resp_data = authenticate_broker(auth_code)
+                            if access_token:
+                                logger.info("Fyers: SUCCESS via POST generate-authcode redirect")
+                                return access_token, None
+                else:
+                    gen_body_post = gen_resp_post.text[:500]
+                    try:
+                        gen_json = gen_resp_post.json()
+                        logger.info(f"Fyers POST generate-authcode JSON: {gen_json}")
+                    except Exception:
+                        logger.info(f"Fyers POST generate-authcode body: {gen_body_post}")
+            except Exception as e:
+                logger.warning(f"Fyers POST generate-authcode failed: {e}")
 
                 # Check for redirect (302) with auth_code in Location header
                 if gen_resp.status_code in (301, 302, 303, 307, 308):
