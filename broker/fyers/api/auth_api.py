@@ -244,34 +244,56 @@ def authenticate_broker_totp(
         res4_data = res4.json()
         logger.info(f"Fyers token response status: {res4_data.get('s')}, keys: {list(res4_data.keys())}")
 
-        # For static IP apps (-200), the response format is different:
-        # {'s': 'ok', 'code': '', 'data': {'auth': '<bearer_jwt>', 'redirectUrl': '...', ...}}
-        # The 'data.auth' is the authorization code that must be exchanged
-        # via validate-authcode to get the actual access token.
-        data_block = res4_data.get("data", {})
-        if isinstance(data_block, dict) and data_block.get("auth"):
-            auth_code = data_block["auth"]
-            logger.info("Fyers static IP flow: exchanging data.auth via validate-authcode")
-            access_token, resp_data = authenticate_broker(auth_code)
-            if access_token:
-                return access_token, None
-            else:
-                err_msg = resp_data.get("message", "Token exchange failed") if isinstance(resp_data, dict) else str(resp_data)
-                logger.warning(f"Fyers static IP validate-authcode failed: {err_msg}")
-                return None, err_msg
+        auth_code = None
 
-        # Legacy flow for -100 apps: extract auth_code from redirect URL
+        # Legacy flow for -100 apps: extract auth_code from "Url" field
         url_str = res4_data.get("Url")
-        if not url_str:
-            return None, f"Fyers auth code generation failed: {res4_data.get('message', str(res4_data))}"
+        if url_str:
+            parsed = urlparse(url_str)
+            qs = parse_qs(parsed.query)
+            auth_code = qs.get("auth_code", [None])[0]
+            if auth_code:
+                logger.info("Fyers: extracted auth_code from Url field (legacy flow)")
 
-        parsed = urlparse(url_str)
-        qs = parse_qs(parsed.query)
-        auth_code = qs.get("auth_code", [None])[0]
+        # For static IP apps (-200): no "Url" field in response.
+        # Use bearer token to call generate-authcode endpoint directly,
+        # which redirects to callback URL with auth_code.
         if not auth_code:
-            return None, f"Could not extract auth_code from Fyers response URL: {url_str}"
+            generate_url = (
+                f"https://api-t1.fyers.in/api/v3/generate-authcode"
+                f"?client_id={broker_api_key}"
+                f"&redirect_uri={callback_url}"
+                f"&response_type=code&state=None&scope=&nonce="
+            )
+            logger.info(f"Fyers static IP flow: calling generate-authcode with bearer token")
+            res5 = client.get(
+                generate_url,
+                headers={"Authorization": f"Bearer {bearer_token}"},
+                follow_redirects=False,
+                timeout=30.0,
+            )
+            logger.info(f"Fyers generate-authcode response: status={res5.status_code}")
 
-        # Step 5: Exchange auth_code for access token (reuse existing logic)
+            if res5.status_code in (301, 302, 303, 307, 308):
+                location = res5.headers.get("location", "")
+                logger.info(f"Fyers generate-authcode redirect location: {location[:200]}")
+                parsed_loc = urlparse(location)
+                qs_loc = parse_qs(parsed_loc.query)
+                auth_code = qs_loc.get("auth_code", [None])[0]
+                if auth_code:
+                    logger.info("Fyers: extracted auth_code from generate-authcode redirect")
+            else:
+                # Log the response for debugging
+                try:
+                    body = res5.json()
+                    logger.info(f"Fyers generate-authcode response body: {body}")
+                except Exception:
+                    logger.info(f"Fyers generate-authcode response text: {res5.text[:500]}")
+
+        if not auth_code:
+            return None, f"Fyers auth code generation failed: could not obtain auth_code"
+
+        # Step 5: Exchange auth_code for access token
         access_token, resp_data = authenticate_broker(auth_code)
         if access_token:
             return access_token, None
