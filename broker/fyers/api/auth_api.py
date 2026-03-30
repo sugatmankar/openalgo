@@ -242,8 +242,17 @@ def authenticate_broker_totp(
             timeout=30.0,
         )
         res4_data = res4.json()
-        logger.info(f"Fyers token response: {res4_data}")
+        logger.info(f"Fyers token response status: {res4_data.get('s')}, keys: {list(res4_data.keys())}")
 
+        # New flow for static IP apps (-200): token returned directly in data.auth
+        if res4_data.get("s") == "ok":
+            data_block = res4_data.get("data", {})
+            if isinstance(data_block, dict) and data_block.get("auth"):
+                access_token = data_block["auth"]
+                logger.info("Fyers: access token obtained directly from token response (static IP flow)")
+                return access_token, None
+
+        # Legacy flow for -100 apps: extract auth_code from redirect URL
         url_str = res4_data.get("Url")
         if not url_str:
             return None, f"Fyers auth code generation failed: {res4_data.get('message', str(res4_data))}"
