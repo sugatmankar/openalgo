@@ -327,8 +327,34 @@ def authenticate_broker_totp(
             except Exception as e:
                 logger.warning(f"Fyers generate-authcode approach failed: {e}")
 
-            # Method 2: data.auth might itself be usable as access token (fallback)
-            logger.info("Fyers: falling back to data.auth JWT as access token")
+            # Method 2: Try data.auth as access token with different header formats
+            # Standard SDK uses "client_id:access_token" format
+            # But for -200 User Apps, maybe just the JWT alone works
+            
+            # Test the token directly by calling profile API
+            test_headers_formats = [
+                (f"{broker_api_key}:{auth_jwt}", "standard client_id:token"),
+                (f"Bearer {auth_jwt}", "Bearer token"),
+                (auth_jwt, "raw JWT"),
+            ]
+            
+            for test_header, desc in test_headers_formats:
+                try:
+                    test_resp = client.get(
+                        "https://api-t1.fyers.in/api/v3/profile",
+                        headers={"Authorization": test_header},
+                        timeout=10.0,
+                    )
+                    test_body = test_resp.json()
+                    logger.info(f"Fyers profile test ({desc}): status={test_resp.status_code}, s={test_body.get('s')}, code={test_body.get('code')}")
+                    if test_body.get("s") == "ok" or test_body.get("code") == 200:
+                        logger.info(f"Fyers: ACCESS TOKEN WORKS with format: {desc}")
+                        return auth_jwt, None
+                except Exception as te:
+                    logger.warning(f"Fyers profile test ({desc}) failed: {te}")
+            
+            # If none worked, still return the JWT as fallback
+            logger.warning("Fyers: data.auth JWT did not work with any header format")
             return auth_jwt, None
 
         return None, f"Fyers auth code generation failed: {res4_data.get('message', str(res4_data))}"
