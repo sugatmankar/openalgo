@@ -10,6 +10,7 @@ import {
   FileStack,
   FileText,
   FlaskConical,
+  Gauge,
   Key,
   Layers,
   LayoutDashboard,
@@ -73,6 +74,7 @@ export const profileMenuItems: NavItem[] = [
   { href: '/historify', label: 'Historify', icon: Database },
   { href: '/search/token', label: 'Search', icon: Search },
   { href: '/sandbox', label: 'Sandbox', icon: FlaskConical },
+  { href: '/leverage', label: 'Leverage', icon: Gauge },
   { href: '/admin', label: 'Admin', icon: Settings },
 ]
 

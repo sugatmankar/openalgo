@@ -5,6 +5,7 @@ import { AuthSync } from '@/components/auth/AuthSync'
 import { FullWidthLayout } from '@/components/layout/FullWidthLayout'
 import { Layout } from '@/components/layout/Layout'
 import { PageLoader } from '@/components/ui/page-loader'
+import { useBrokerStore } from '@/stores/brokerStore'
 
 // Lazy load all pages for code splitting
 // Public pages
@@ -19,8 +20,8 @@ const RateLimited = lazy(() => import('@/pages/RateLimited'))
 const NotFound = lazy(() => import('@/pages/NotFound'))
 
 // Broker auth
+const BrokerSelect = lazy(() => import('@/pages/BrokerSelect'))
 const BrokerTOTP = lazy(() => import('@/pages/BrokerTOTP'))
-const BrokerAccounts = lazy(() => import('@/pages/BrokerAccounts'))
 
 // Main pages
 const Dashboard = lazy(() => import('@/pages/Dashboard'))
@@ -52,13 +53,12 @@ const HistorifyCharts = lazy(() => import('@/pages/HistorifyCharts'))
 
 // Tools & Option Chain
 const Tools = lazy(() => import('@/pages/Tools'))
-const ScalperTerminal = lazy(() => import('@/pages/ScalperTerminal'))
 const OptionChain = lazy(() => import('@/pages/OptionChain'))
 const IVChart = lazy(() => import('@/pages/IVChart'))
 const OITracker = lazy(() => import('@/pages/OITracker'))
 const MaxPain = lazy(() => import('@/pages/MaxPain'))
 const StraddleChart = lazy(() => import('@/pages/StraddleChart'))
-const CombinePremium = lazy(() => import('@/pages/CombinePremium'))
+const CustomStraddle = lazy(() => import('@/pages/CustomStraddle'))
 const VolSurface = lazy(() => import('@/pages/VolSurface'))
 const GEXDashboard = lazy(() => import('@/pages/GEXDashboard'))
 const IVSmile = lazy(() => import('@/pages/IVSmile'))
@@ -88,6 +88,27 @@ const ConfigureChartinkSymbols = lazy(() => import('@/pages/chartink/ConfigureCh
 const FlowIndex = lazy(() => import('@/pages/flow/FlowIndex'))
 const FlowEditor = lazy(() => import('@/pages/flow/FlowEditor'))
 const FlowKeyboardShortcuts = lazy(() => import('@/pages/flow/FlowKeyboardShortcuts'))
+
+// Leverage page (crypto brokers only)
+const Leverage = lazy(() => import('@/pages/Leverage'))
+
+/** Route guard: only renders children if leverage_config is true, else redirects to dashboard */
+function LeverageRoute() {
+  const capabilities = useBrokerStore((s) => s.capabilities)
+  if (!capabilities?.leverage_config) {
+    return <Navigate to="/dashboard" replace />
+  }
+  return <Leverage />
+}
+
+/** Route guard: hide Holdings for crypto brokers (no equity holdings concept) */
+function HoldingsRoute() {
+  const capabilities = useBrokerStore((s) => s.capabilities)
+  if (capabilities?.broker_type === 'crypto') {
+    return <Navigate to="/dashboard" replace />
+  }
+  return <Holdings />
+}
 
 // Admin pages
 const AdminIndex = lazy(() => import('@/pages/admin/AdminIndex'))
@@ -127,7 +148,7 @@ function App() {
               <Route path="/rate-limited" element={<RateLimited />} />
 
               {/* Broker auth routes */}
-              <Route path="/broker" element={<Navigate to="/broker-accounts" replace />} />
+              <Route path="/broker" element={<BrokerSelect />} />
               <Route path="/broker/:broker/totp" element={<BrokerTOTP />} />
               {/* Dynamic broker TOTP routes for all supported brokers */}
               <Route path="/:broker/auth" element={<BrokerTOTP />} />
@@ -138,7 +159,7 @@ function App() {
                 <Route path="/positions" element={<Positions />} />
                 <Route path="/orderbook" element={<OrderBook />} />
                 <Route path="/tradebook" element={<TradeBook />} />
-                <Route path="/holdings" element={<Holdings />} />
+                <Route path="/holdings" element={<HoldingsRoute />} />
                 {/* Search routes - match Flask /search/* routes */}
                 <Route path="/search/token" element={<Token />} />
                 <Route path="/search" element={<Search />} />
@@ -154,13 +175,12 @@ function App() {
                 <Route path="/sandbox/mypnl" element={<SandboxPnL />} />
                 <Route path="/analyzer" element={<Analyzer />} />
                 <Route path="/tools" element={<Tools />} />
-                <Route path="/scalper" element={<ScalperTerminal />} />
                 <Route path="/optionchain" element={<OptionChain />} />
                 <Route path="/ivchart" element={<IVChart />} />
                 <Route path="/oitracker" element={<OITracker />} />
                 <Route path="/maxpain" element={<MaxPain />} />
                 <Route path="/straddle" element={<StraddleChart />} />
-                <Route path="/combine-premium" element={<CombinePremium />} />
+                <Route path="/straddlepnl" element={<CustomStraddle />} />
                 <Route path="/volsurface" element={<VolSurface />} />
                 <Route path="/gex" element={<GEXDashboard />} />
                 <Route path="/ivsmile" element={<IVSmile />} />
@@ -192,6 +212,8 @@ function App() {
                 {/* Flow Editor */}
                 <Route path="/flow" element={<FlowIndex />} />
                 <Route path="/flow/shortcuts" element={<FlowKeyboardShortcuts />} />
+                {/* Leverage Configuration (crypto brokers only) */}
+                <Route path="/leverage" element={<LeverageRoute />} />
                 {/* Phase 7: Admin */}
                 <Route path="/admin" element={<AdminIndex />} />
                 <Route path="/admin/freeze" element={<FreezeQty />} />
@@ -214,7 +236,6 @@ function App() {
                 <Route path="/profile" element={<Profile />} />
                 <Route path="/master-contract" element={<MasterContract />} />
                 <Route path="/action-center" element={<ActionCenter />} />
-                <Route path="/broker-accounts" element={<BrokerAccounts />} />
               </Route>
 
               {/* Full-width protected routes */}

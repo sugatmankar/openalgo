@@ -109,7 +109,7 @@ class BrokerData:
                 "token": token,
             }
 
-            response = get_api_response("/PiConnectTP/GetQuotes", self.auth_token, payload=payload)
+            response = get_api_response("/PiConnectAPI/GetQuotes", self.auth_token, payload=payload)
 
             if response.get("stat") != "Ok":
                 raise Exception(
@@ -188,7 +188,7 @@ class BrokerData:
 
             payload_str = "jData=" + json.dumps(data) + "&jKey=" + self.auth_token
             headers = {"Content-Type": "application/x-www-form-urlencoded"}
-            url = "https://piconnect.flattrade.in/PiConnectTP/GetQuotes"
+            url = "https://piconnect.flattrade.in/PiConnectAPI/GetQuotes"
 
             # Use httpx.post for sync requests
             http_response = httpx.post(url, content=payload_str, headers=headers, timeout=10.0)
@@ -238,7 +238,7 @@ class BrokerData:
 
             payload_str = "jData=" + json.dumps(data) + "&jKey=" + self.auth_token
             headers = {"Content-Type": "application/x-www-form-urlencoded"}
-            url = "https://piconnect.flattrade.in/PiConnectTP/GetQuotes"
+            url = "https://piconnect.flattrade.in/PiConnectAPI/GetQuotes"
 
             # Use async httpx client
             http_response = await client.post(url, content=payload_str, headers=headers)
@@ -450,7 +450,7 @@ class BrokerData:
                 "token": token,
             }
 
-            response = get_api_response("/PiConnectTP/GetQuotes", self.auth_token, payload=payload)
+            response = get_api_response("/PiConnectAPI/GetQuotes", self.auth_token, payload=payload)
 
             if response.get("stat") != "Ok":
                 raise Exception(
@@ -562,7 +562,7 @@ class BrokerData:
                 logger.debug(f"EOD Payload: {payload}")  # Debug print
                 try:
                     response = get_api_response(
-                        "/PiConnectTP/EODChartData", self.auth_token, payload=payload
+                        "/PiConnectAPI/EODChartData", self.auth_token, payload=payload
                     )
                     logger.debug(f"EOD Response: {response}")  # Debug print
                 except Exception as e:
@@ -580,7 +580,7 @@ class BrokerData:
                 }
                 logger.debug(f"Intraday Payload: {payload}")  # Debug print
                 response = get_api_response(
-                    "/PiConnectTP/TPSeries", self.auth_token, payload=payload
+                    "/PiConnectAPI/TPSeries", self.auth_token, payload=payload
                 )
                 logger.debug(f"Intraday Response: {response}")  # Debug print
 

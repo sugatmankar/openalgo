@@ -1782,45 +1782,44 @@ class WebSocketProxy:
                         logger.exception(f"Error handling cache invalidation: {e}")
                     continue  # Skip market data processing for cache messages
 
+                # Skip private account-level event topics (orders, positions, margins).
+                # These are published by broker adapters on the shared ZMQ socket but
+                # do not follow the BROKER_EXCHANGE_SYMBOL_MODE market-data format.
+                if topic_str.endswith(("_orders", "_positions", "_margins")):
+                    logger.debug(f"Skipping private event topic: {topic_str}")
+                    continue
+
                 market_data = json.loads(data_str)
 
-                # Extract topic components
-                # Support both formats:
-                # New format: BROKER_EXCHANGE_SYMBOL_MODE (with broker name)
-                # Old format: EXCHANGE_SYMBOL_MODE (without broker name)
-                # Special case: NSE_INDEX_SYMBOL_MODE (exchange contains underscore)
+                # Extract topic components from ZMQ topic string.
+                # All adapters publish: EXCHANGE_SYMBOL_MODE
+                # Mode (LTP/QUOTE/DEPTH) is always the LAST segment.
+                # Exchange is the first segment (NSE, BSE, NFO, MCX, CRYPTO, …)
+                #   except NSE_INDEX / BSE_INDEX which span two segments.
+                # Symbol is everything between exchange and mode — may contain
+                # underscores for crypto spot pairs (e.g. CRYPTO_SOL_INR_LTP).
                 parts = topic_str.split("_")
 
-                # Special case handling for NSE_INDEX and BSE_INDEX
-                if len(parts) >= 4 and parts[0] == "NSE" and parts[1] == "INDEX":
-                    broker_name = "unknown"
-                    exchange = "NSE_INDEX"
-                    symbol = parts[2]
-                    mode_str = parts[3]
-                elif len(parts) >= 4 and parts[0] == "BSE" and parts[1] == "INDEX":
-                    broker_name = "unknown"
-                    exchange = "BSE_INDEX"
-                    symbol = parts[2]
-                    mode_str = parts[3]
-                elif len(parts) >= 5 and parts[1] == "INDEX":  # BROKER_NSE_INDEX_SYMBOL_MODE format
-                    broker_name = parts[0]
-                    exchange = f"{parts[1]}_{parts[2]}"
-                    symbol = parts[3]
-                    mode_str = parts[4]
-                elif len(parts) >= 4:
-                    # Standard format with broker name
-                    broker_name = parts[0]
-                    exchange = parts[1]
-                    symbol = parts[2]
-                    mode_str = parts[3]
-                elif len(parts) >= 3:
-                    # Old format without broker name
-                    broker_name = "unknown"
-                    exchange = parts[0]
-                    symbol = parts[1]
-                    mode_str = parts[2]
-                else:
+                if len(parts) < 3:
                     logger.warning(f"Invalid topic format: {topic_str}")
+                    continue
+
+                broker_name = "unknown"
+
+                # Mode is always the last segment
+                mode_str = parts[-1]
+                remaining = parts[:-1]  # everything except mode
+
+                # Detect NSE_INDEX / BSE_INDEX exchange prefix (two segments)
+                if len(remaining) >= 2 and remaining[0] in ("NSE", "BSE") and remaining[1] == "INDEX":
+                    exchange = f"{remaining[0]}_{remaining[1]}"
+                    symbol = "_".join(remaining[2:])
+                else:
+                    exchange = remaining[0]
+                    symbol = "_".join(remaining[1:])
+
+                if not symbol:
+                    logger.warning(f"Invalid topic format (no symbol): {topic_str}")
                     continue
 
                 # OPTIMIZATION: Use pre-computed mode map

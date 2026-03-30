@@ -34,10 +34,10 @@ const tools = [
     color: 'bg-teal-500',
   },
   {
-    title: 'Combined Premium Chart',
-    description: 'Combined premium chart for multi-leg option strategies with flexible BUY/SELL legs',
-    href: '/combine-premium',
-    color: 'bg-lime-500',
+    title: 'Straddle PnL',
+    description: 'Simulated intraday ATM straddle P&L with automated N-point adjustments and trade log',
+    href: '/straddlepnl',
+    color: 'bg-orange-500',
   },
   {
     title: 'Vol Surface',
