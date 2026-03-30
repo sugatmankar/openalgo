@@ -242,7 +242,21 @@ def authenticate_broker_totp(
             timeout=30.0,
         )
         res4_data = res4.json()
-        logger.info(f"Fyers token response status: {res4_data.get('s')}, keys: {list(res4_data.keys())}")
+        logger.info(f"Fyers token response: status={res4_data.get('s')}, code={res4_data.get('code')}, keys={list(res4_data.keys())}")
+        # Log all top-level values (mask long strings)
+        for k, v in res4_data.items():
+            val_str = str(v)
+            if len(val_str) > 200:
+                val_str = val_str[:100] + f"...({len(val_str)} chars)"
+            logger.info(f"  Fyers token[{k}] = {val_str}")
+        # If data block exists, log its sub-keys too
+        data_block_raw = res4_data.get("data", {})
+        if isinstance(data_block_raw, dict):
+            for dk, dv in data_block_raw.items():
+                dval = str(dv)
+                if len(dval) > 200:
+                    dval = dval[:100] + f"...({len(dval)} chars)"
+                logger.info(f"  Fyers token.data[{dk}] = {dval}")
 
         # Legacy flow for -100 apps: extract auth_code from "Url" field
         url_str = res4_data.get("Url")
