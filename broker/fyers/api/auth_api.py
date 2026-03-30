@@ -217,7 +217,7 @@ def authenticate_broker_totp(
             app_prefix = broker_api_key[:-4] if len(broker_api_key) > 4 else broker_api_key
             app_type = "100"
 
-        logger.debug(f"Fyers app_id={app_prefix}, appType={app_type}")
+        logger.info(f"Fyers app_id={app_prefix}, appType={app_type}")
 
         # Use account redirect_url or fall back to env
         callback_url = redirect_url
@@ -242,7 +242,7 @@ def authenticate_broker_totp(
             timeout=30.0,
         )
         res4_data = res4.json()
-        logger.debug(f"Fyers token response keys: {list(res4_data.keys())}")
+        logger.info(f"Fyers token response: {res4_data}")
 
         url_str = res4_data.get("Url")
         if not url_str:
