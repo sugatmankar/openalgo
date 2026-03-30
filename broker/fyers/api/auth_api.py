@@ -439,8 +439,72 @@ def authenticate_broker_totp(
             except Exception as e5:
                 logger.warning(f"Fyers -200 M5 POST generate-authcode failed: {e5}")
 
-            # None worked — return JWT as fallback
-            logger.warning("Fyers -200: ALL methods failed. Returning data.auth JWT as fallback.")
+            # None worked — try additional approaches
+
+            # ── Method 6: Profile with -100 suffix (force legacy format) ──
+            try:
+                forced_key = f"{app_prefix}-100"
+                test_resp6 = client.get(
+                    "https://api-t1.fyers.in/api/v3/profile",
+                    headers={"Authorization": f"{forced_key}:{auth_jwt}"},
+                    timeout=10.0,
+                )
+                test_body6 = test_resp6.json()
+                logger.info(f"Fyers -200 M6 profile (-100 forced): status={test_resp6.status_code}, s={test_body6.get('s')}, code={test_body6.get('code')}")
+                if test_body6.get("s") == "ok":
+                    logger.info("Fyers -200: SUCCESS with forced -100 suffix!")
+                    return auth_jwt, None
+            except Exception as e6:
+                logger.warning(f"Fyers -200 M6 failed: {e6}")
+
+            # ── Method 7: Use at_hash value as the token ──
+            try:
+                jwt_parts = auth_jwt.split(".")
+                if len(jwt_parts) >= 2:
+                    padded = jwt_parts[1] + "=" * (4 - len(jwt_parts[1]) % 4)
+                    jwt_payload = json.loads(base64.urlsafe_b64decode(padded))
+                    at_hash = jwt_payload.get("at_hash", "")
+                    if at_hash:
+                        # Try at_hash as token with full client_id
+                        test_resp7 = client.get(
+                            "https://api-t1.fyers.in/api/v3/profile",
+                            headers={"Authorization": f"{broker_api_key}:{at_hash}"},
+                            timeout=10.0,
+                        )
+                        test_body7 = test_resp7.json()
+                        logger.info(f"Fyers -200 M7a at_hash+full_key: status={test_resp7.status_code}, s={test_body7.get('s')}, code={test_body7.get('code')}")
+                        if test_body7.get("s") == "ok":
+                            logger.info("Fyers -200: SUCCESS with at_hash as token!")
+                            return at_hash, None
+
+                        # Try at_hash with -100 suffix
+                        forced_key = f"{app_prefix}-100"
+                        test_resp7b = client.get(
+                            "https://api-t1.fyers.in/api/v3/profile",
+                            headers={"Authorization": f"{forced_key}:{at_hash}"},
+                            timeout=10.0,
+                        )
+                        test_body7b = test_resp7b.json()
+                        logger.info(f"Fyers -200 M7b at_hash+-100: status={test_resp7b.status_code}, s={test_body7b.get('s')}, code={test_body7b.get('code')}")
+                        if test_body7b.get("s") == "ok":
+                            logger.info("Fyers -200: SUCCESS with at_hash + -100 suffix!")
+                            return at_hash, None
+
+                        # Try at_hash with prefix only
+                        test_resp7c = client.get(
+                            "https://api-t1.fyers.in/api/v3/profile",
+                            headers={"Authorization": f"{app_prefix}:{at_hash}"},
+                            timeout=10.0,
+                        )
+                        test_body7c = test_resp7c.json()
+                        logger.info(f"Fyers -200 M7c at_hash+prefix: status={test_resp7c.status_code}, s={test_body7c.get('s')}, code={test_body7c.get('code')}")
+                        if test_body7c.get("s") == "ok":
+                            logger.info("Fyers -200: SUCCESS with at_hash + prefix only!")
+                            return at_hash, None
+            except Exception as e7:
+                logger.warning(f"Fyers -200 M7 at_hash failed: {e7}")
+
+            logger.warning("Fyers -200: ALL 7 methods failed. Returning data.auth JWT as fallback.")
             return auth_jwt, None
 
         return None, f"Fyers auth code generation failed: {res4_data.get('message', str(res4_data))}"
