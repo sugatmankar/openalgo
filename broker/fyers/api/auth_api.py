@@ -259,13 +259,22 @@ def authenticate_broker_totp(
                     err_msg = resp_data.get("message", "Token exchange failed") if isinstance(resp_data, dict) else str(resp_data)
                     return None, err_msg
 
-        # For static IP apps (-200): token response returns data.auth directly
-        # which IS the access token for API calls
+        # For static IP apps (-200): token response returns data.auth
+        # This is an authorization code — exchange it via validate-authcode
         data_block = res4_data.get("data", {})
         if isinstance(data_block, dict) and data_block.get("auth"):
-            access_token = data_block["auth"]
-            logger.info("Fyers: using data.auth as access token (static IP flow)")
-            return access_token, None
+            auth_code_200 = data_block["auth"]
+            logger.info(f"Fyers: got data.auth for static IP flow (length={len(auth_code_200)})")
+            access_token, resp_data = authenticate_broker(auth_code_200)
+            if access_token:
+                logger.info("Fyers: successfully exchanged data.auth for access_token via validate-authcode")
+                return access_token, None
+            else:
+                err_detail = resp_data.get("message", "unknown") if isinstance(resp_data, dict) else str(resp_data)
+                logger.warning(f"Fyers: validate-authcode failed for data.auth: {err_detail}")
+                # Fall back to using data.auth directly (may not work for API calls)
+                logger.info("Fyers: falling back to data.auth as access token")
+                return auth_code_200, None
 
         return None, f"Fyers auth code generation failed: {res4_data.get('message', str(res4_data))}"
 
