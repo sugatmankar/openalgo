@@ -110,6 +110,12 @@ def react_broker():
     return serve_react_app()
 
 
+# Broker accounts management
+@react_bp.route("/broker-accounts")
+def react_broker_accounts():
+    return serve_react_app()
+
+
 # Broker TOTP routes - serve React for broker authentication forms
 @react_bp.route("/broker/<broker>/totp")
 def react_broker_totp(broker):
