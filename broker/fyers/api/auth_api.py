@@ -244,13 +244,54 @@ def authenticate_broker_totp(
         res4_data = res4.json()
         logger.info(f"Fyers token response status: {res4_data.get('s')}, keys: {list(res4_data.keys())}")
 
-        # New flow for static IP apps (-200): token returned directly in data.auth
-        if res4_data.get("s") == "ok":
-            data_block = res4_data.get("data", {})
-            if isinstance(data_block, dict) and data_block.get("auth"):
-                access_token = data_block["auth"]
-                logger.info("Fyers: access token obtained directly from token response (static IP flow)")
-                return access_token, None
+        # For static IP apps (-200), the response format is different:
+        # {'s': 'ok', 'code': '', 'data': {'auth': '<bearer_jwt>', 'redirectUrl': '...', ...}}
+        # The 'data.auth' is a bearer token; we need to GET the redirectUrl with it
+        # to obtain the auth_code, then exchange it via validate-authcode.
+        data_block = res4_data.get("data", {})
+        if isinstance(data_block, dict) and data_block.get("auth") and data_block.get("redirectUrl"):
+            # Static IP flow: follow the redirect URL to get auth_code
+            redirect_url_str = data_block["redirectUrl"]
+            auth_bearer = data_block["auth"]
+            logger.info(f"Fyers static IP flow: following redirectUrl to get auth_code")
+
+            res5 = client.get(
+                redirect_url_str,
+                headers={"Authorization": f"Bearer {auth_bearer}"},
+                params={
+                    "client_id": broker_api_key,
+                    "redirect_uri": callback_url,
+                    "response_type": "code",
+                    "state": "None",
+                },
+                follow_redirects=False,
+                timeout=30.0,
+            )
+            logger.info(f"Fyers redirect response: status={res5.status_code}, headers={dict(res5.headers)}")
+
+            # Check if we got a redirect with auth_code
+            if res5.status_code in (301, 302, 303, 307, 308):
+                location = res5.headers.get("location", "")
+                parsed_loc = urlparse(location)
+                qs_loc = parse_qs(parsed_loc.query)
+                auth_code = qs_loc.get("auth_code", [None])[0]
+                if auth_code:
+                    logger.info("Fyers: extracted auth_code from redirect location")
+                    access_token, resp_data = authenticate_broker(auth_code)
+                    if access_token:
+                        return access_token, None
+                    else:
+                        err_msg = resp_data.get("message", "Token exchange failed") if isinstance(resp_data, dict) else str(resp_data)
+                        return None, err_msg
+
+            # If no redirect, try parsing response body
+            try:
+                res5_data = res5.json()
+                logger.info(f"Fyers redirect response body: {res5_data}")
+            except Exception:
+                logger.info(f"Fyers redirect response body (text): {res5.text[:500]}")
+
+            return None, f"Fyers static IP auth: could not obtain auth_code from redirect (status={res5.status_code})"
 
         # Legacy flow for -100 apps: extract auth_code from redirect URL
         url_str = res4_data.get("Url")
