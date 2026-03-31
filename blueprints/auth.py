@@ -29,7 +29,7 @@ from limiter import limiter  # Import the limiter instance
 from utils.email_debug import debug_smtp_connection
 from utils.email_utils import send_password_reset_email, send_test_email
 from utils.logging import get_logger
-from utils.session import check_session_validity
+from utils.session import check_session_validity, set_session_login_time
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -131,10 +131,12 @@ def login():
         password = request.form["password"]
 
         if authenticate_user(username, password):
-            session["user"] = username  # Set the username in the session
+            session["user"] = username
+            session["logged_in"] = True
+            session.pop("broker", None)
+            set_session_login_time()
             logger.info(f"Login success for user: {username}")
-            # Redirect to broker login without marking as fully logged in
-            return jsonify({"status": "success"}), 200
+            return jsonify({"status": "success", "redirect": "/dashboard"}), 200
         else:
             return jsonify({"status": "error", "message": "Invalid credentials"}), 401
 
