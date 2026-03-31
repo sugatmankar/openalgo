@@ -30,7 +30,7 @@ export const useAuthStore = create<AuthStore>()(
       apiKey: null,
       isAuthenticated: false,
 
-      setUser: (user) => set({ user, isAuthenticated: user.isLoggedIn }),
+      setUser: (user) => set({ user, isAuthenticated: true }),
 
       setApiKey: (apiKey) => set({ apiKey }),
 
