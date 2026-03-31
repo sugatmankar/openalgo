@@ -181,7 +181,12 @@ def _create_http_client() -> httpx.Client:
         # Disable HTTP/2 in standalone/Docker environments to avoid protocol negotiation issues
         http2_enabled = not is_standalone
 
-        client = httpx.Client(
+        # Support binding outbound connections to a specific local IP address
+        # This is used in multi-instance deployments where each instance needs
+        # a unique public IP for broker API whitelisting
+        local_address = os.environ.get("OUTBOUND_SOURCE_IP", "").strip().strip("'\"")
+
+        client_kwargs = dict(
             http2=http2_enabled,  # Disable HTTP/2 in standalone mode, enable in integrated mode
             http1=True,  # Always enable HTTP/1.1 for compatibility
             timeout=120.0,  # Increased timeout for large historical data requests
@@ -195,6 +200,12 @@ def _create_http_client() -> httpx.Client:
             # Add event hooks for latency tracking
             event_hooks={"request": [log_request], "response": [log_response]},
         )
+
+        if local_address:
+            client_kwargs["local_address"] = local_address
+            logger.info(f"Binding outbound HTTP connections to local address: {local_address}")
+
+        client = httpx.Client(**client_kwargs)
 
         if is_standalone:
             logger.info("Running in standalone mode - HTTP/2 disabled for compatibility")
