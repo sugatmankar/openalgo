@@ -8,15 +8,31 @@ Provides CRUD API for managing multiple broker accounts per user.
 import os
 import re
 import time
+from functools import wraps
 
 from flask import Blueprint, jsonify, request, session
 
 from utils.logging import get_logger
-from utils.session import check_session_validity
 
 logger = get_logger(__name__)
 
 broker_accounts_bp = Blueprint("broker_accounts_bp", __name__, url_prefix="/api/broker-accounts")
+
+
+def require_authenticated_user(f):
+    """Require password-authenticated user session.
+
+    This endpoint group must work immediately after `/auth/login`, where
+    `session["user"]` exists but `session["logged_in"]` may not yet be set.
+    """
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if "user" not in session:
+            return jsonify({"status": "error", "message": "Not authenticated"}), 401
+        return f(*args, **kwargs)
+
+    return wrapper
 
 
 def _get_valid_brokers():
@@ -26,7 +42,7 @@ def _get_valid_brokers():
 
 
 @broker_accounts_bp.route("", methods=["GET"])
-@check_session_validity
+@require_authenticated_user
 def list_accounts():
     """List all broker accounts for the logged-in user.
     
@@ -70,7 +86,7 @@ def list_accounts():
 
 
 @broker_accounts_bp.route("", methods=["POST"])
-@check_session_validity
+@require_authenticated_user
 def create_account():
     """Create a new broker account."""
     if "user" not in session:
@@ -159,7 +175,7 @@ def create_account():
 
 
 @broker_accounts_bp.route("/<int:account_id>", methods=["GET"])
-@check_session_validity
+@require_authenticated_user
 def get_account(account_id):
     """Get a single broker account (credentials masked)."""
     if "user" not in session:
@@ -180,7 +196,7 @@ def get_account(account_id):
 
 
 @broker_accounts_bp.route("/<int:account_id>", methods=["PUT"])
-@check_session_validity
+@require_authenticated_user
 def update_account(account_id):
     """Update a broker account."""
     if "user" not in session:
@@ -244,7 +260,7 @@ def update_account(account_id):
 
 
 @broker_accounts_bp.route("/<int:account_id>", methods=["DELETE"])
-@check_session_validity
+@require_authenticated_user
 def delete_account(account_id):
     """Delete a broker account and its associated auth data."""
     if "user" not in session:
@@ -271,7 +287,7 @@ def delete_account(account_id):
 
 
 @broker_accounts_bp.route("/<int:account_id>/authenticate", methods=["POST"])
-@check_session_validity
+@require_authenticated_user
 def authenticate_account(account_id):
     """
     Initiate broker authentication for a specific account.
@@ -365,7 +381,7 @@ def authenticate_account(account_id):
 
 
 @broker_accounts_bp.route("/<int:account_id>/set-active", methods=["POST"])
-@check_session_validity
+@require_authenticated_user
 def set_active_account(account_id):
     """Set a broker account as the currently active one in the session.
 
@@ -504,7 +520,7 @@ def set_active_account(account_id):
 
 
 @broker_accounts_bp.route("/active", methods=["GET"])
-@check_session_validity
+@require_authenticated_user
 def get_active_account():
     """Get the currently active broker account."""
     if "user" not in session:
@@ -526,7 +542,7 @@ def get_active_account():
 
 
 @broker_accounts_bp.route("/brokers", methods=["GET"])
-@check_session_validity
+@require_authenticated_user
 def get_available_brokers():
     """Return the list of valid brokers with display names."""
     # All supported brokers with display names
