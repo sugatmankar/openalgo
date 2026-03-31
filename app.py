@@ -478,11 +478,14 @@ def create_app():
 
         active_id = session.get("active_account_id")
         if not active_id:
+            logger.debug(f"restore_account_env: no active_account_id in session for user={session.get('user')}")
             return
 
         # If env is already configured for this account, nothing to do
         if _current_env_account_id["value"] == active_id:
             return
+
+        logger.info(f"restore_account_env: restoring env for account {active_id} (current={_current_env_account_id['value']})")
 
         try:
             from database.broker_account_db import get_broker_account

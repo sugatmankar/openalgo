@@ -92,6 +92,8 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
         logger.error("BROKER_API_KEY environment variable not set")
         return default_response
 
+    logger.info(f"Fyers funds: using BROKER_API_KEY={api_key[:15]}... (len={len(api_key)})")
+
     headers = {
         "Authorization": f"{api_key}:{auth_token}",
         "Content-Type": "application/json",
@@ -101,7 +103,7 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
     try:
         # Get the funds data
         funds_data = _fetch_funds_response(headers)
-        logger.debug(f"Fyers funds API response: {json.dumps(funds_data, indent=2)}")
+        logger.info(f"Fyers funds API response code={funds_data.get('code')}, fund_limit_count={len(funds_data.get('fund_limit', []))}")
 
         if funds_data.get("code") != 200:
             error_msg = funds_data.get("message", "Unknown error")
