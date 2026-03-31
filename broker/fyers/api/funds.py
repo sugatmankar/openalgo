@@ -7,6 +7,7 @@ import time
 from typing import Any, Dict, Optional
 
 import httpx
+import requests
 
 from broker.fyers.api.order_api import get_positions
 from broker.fyers.mapping.order_data import map_position_data
@@ -23,6 +24,26 @@ _lock = threading.Lock()
 CACHE_TTL = 60  # seconds - serve cached data within this window
 INITIAL_BACKOFF = 30  # seconds - first backoff after 429
 MAX_BACKOFF = 120  # seconds - maximum backoff duration
+
+
+def _fetch_funds_response(headers: dict[str, str]) -> dict[str, Any]:
+    """Fetch Fyers funds response using httpx first, then requests as fallback."""
+    url = "https://api-t1.fyers.in/api/v3/funds"
+
+    try:
+        client = get_httpx_client()
+        response = client.get(url, headers=headers, timeout=10.0)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPStatusError:
+        raise
+    except httpx.RequestError as exc:
+        logger.warning(f"Fyers funds httpx request failed, retrying with requests: {exc}")
+
+    session = requests.Session()
+    response = session.get(url, headers=headers, timeout=15)
+    response.raise_for_status()
+    return response.json()
 
 
 def get_margin_data(auth_token: str) -> dict[str, str]:
@@ -71,17 +92,15 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
         logger.error("BROKER_API_KEY environment variable not set")
         return default_response
 
-    # Get shared HTTP client with connection pooling
-    client = get_httpx_client()
-
-    headers = {"Authorization": f"{api_key}:{auth_token}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"{api_key}:{auth_token}",
+        "Content-Type": "application/json",
+        "version": "3",
+    }
 
     try:
         # Get the funds data
-        response = client.get("https://api-t1.fyers.in/api/v3/funds", headers=headers, timeout=30.0)
-        response.raise_for_status()
-
-        funds_data = response.json()
+        funds_data = _fetch_funds_response(headers)
         logger.debug(f"Fyers funds API response: {json.dumps(funds_data, indent=2)}")
 
         if funds_data.get("code") != 200:
@@ -183,6 +202,12 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
             )
             return user_cache["data"] if user_cache["data"] else default_response
         logger.error(f"HTTP error {e.response.status_code} fetching Fyers funds: {e.response.text}")
+    except requests.HTTPError as e:
+        status_code = e.response.status_code if e.response is not None else "unknown"
+        response_text = e.response.text if e.response is not None else str(e)
+        logger.error(f"HTTP error {status_code} fetching Fyers funds via requests: {response_text}")
+    except requests.RequestException as e:
+        logger.error(f"Requests fallback failed fetching Fyers funds: {str(e)}")
     except httpx.RequestError as e:
         logger.error(f"Request failed: {str(e)}")
     except json.JSONDecodeError as e:
