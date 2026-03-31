@@ -144,7 +144,16 @@ def authenticate_broker_totp(user_id, password, totp_code):
             "Referer": "https://auth.flattrade.in/",
         }
 
-        with httpx.Client(timeout=30.0, follow_redirects=True, headers=headers) as client:
+        # Build transport with source IP binding if configured
+        transport_kwargs = {}
+        local_address = os.environ.get("OUTBOUND_SOURCE_IP", "").strip().strip("'\"")
+        if local_address:
+            transport_kwargs["local_address"] = local_address
+            logger.info(f"Flattrade TOTP auth binding to source IP: {local_address}")
+
+        transport = httpx.HTTPTransport(http1=True, **transport_kwargs)
+
+        with httpx.Client(transport=transport, timeout=30.0, follow_redirects=True, headers=headers) as client:
             # Step 1: Get session ID
             ses_url = f"{FLATTRADE_AUTH_HOST}/auth/session"
             res = client.post(ses_url)
