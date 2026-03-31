@@ -117,7 +117,7 @@ export const brokerAccountsApi = {
   /** Initiate authentication for a broker account */
   authenticate: async (
     accountId: number,
-    extraData?: Record<string, string>
+    extraData?: Record<string, string | boolean>
   ): Promise<{
     auth_type: 'oauth' | 'totp' | 'auto'
     auth_url?: string

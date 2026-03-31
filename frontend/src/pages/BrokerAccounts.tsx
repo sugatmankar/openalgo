@@ -73,6 +73,17 @@ const XTS_BROKERS = new Set([
   'wisdom',
 ])
 
+const MANUAL_AUTH_BROKERS = new Set([
+  'fyers',
+  'zerodha',
+  'upstox',
+  'flattrade',
+  'dhan',
+  'compositedge',
+  'paytm',
+  'pocketful',
+])
+
 // Per-broker extra field requirements for TOTP/auto-auth
 // These define what additional fields to show in the form
 interface BrokerFieldConfig {
@@ -325,6 +336,27 @@ export default function BrokerAccounts() {
     }
   }
 
+  const handleManualAuthenticate = async (account: BrokerAccount) => {
+    setAuthenticatingId(account.id)
+    try {
+      const result = await brokerAccountsApi.authenticate(account.id, {
+        force_manual: true,
+      })
+
+      if (result.auth_url) {
+        window.location.href = result.auth_url
+        return
+      }
+
+      showToast.error(result.message || 'Manual authentication is not available')
+    } catch (e: unknown) {
+      const errData = (e as { response?: { data?: { message?: string } } }).response?.data
+      showToast.error(errData?.message || 'Failed to start manual authentication')
+    } finally {
+      setAuthenticatingId(null)
+    }
+  }
+
   const handleSetActive = async (account: BrokerAccount) => {
     setActivatingId(account.id)
     try {
@@ -453,6 +485,8 @@ export default function BrokerAccounts() {
       && !account.totp_key.match(/^\*+$/)
   }
 
+  const hasManualAuth = (account: BrokerAccount) => MANUAL_AUTH_BROKERS.has(account.broker)
+
   // Render
   if (isLoading) {
     return (
@@ -576,6 +610,27 @@ export default function BrokerAccounts() {
                         </>
                       )}
                     </Button>
+                    {hasManualAuth(account) && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => handleManualAuthenticate(account)}
+                        disabled={authenticatingId === account.id}
+                        title="Open broker login page for manual authentication"
+                      >
+                        {authenticatingId === account.id ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                            Redirecting...
+                          </>
+                        ) : (
+                          <>
+                            <ExternalLink className="h-4 w-4 mr-1" />
+                            Manual Auth
+                          </>
+                        )}
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant="outline"

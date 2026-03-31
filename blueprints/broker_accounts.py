@@ -305,6 +305,9 @@ def authenticate_account(account_id):
     try:
         from database.broker_account_db import get_broker_account, update_connection_status
 
+        data = request.get_json(silent=True) or {}
+        force_manual = str(data.get("force_manual", "")).lower() in ("1", "true", "yes", "on")
+
         account = get_broker_account(account_id, session["user"])
         if not account:
             return jsonify({"status": "error", "message": "Account not found"}), 404
@@ -324,6 +327,24 @@ def authenticate_account(account_id):
         oauth_only_brokers = {
             "compositedge", "paytm", "pocketful",
         }
+        hybrid_manual_brokers = {"fyers", "zerodha", "upstox", "flattrade", "dhan"}
+
+        if force_manual:
+            redirect_url = account.get("redirect_url") or ""
+            api_key = account["broker_api_key"]
+            auth_url = _get_oauth_url(broker, api_key, redirect_url)
+            if auth_url:
+                logger.info(f"Manual auth requested for {broker} account {account_id}")
+                return jsonify({
+                    "status": "success",
+                    "auth_type": "oauth",
+                    "auth_url": auth_url,
+                    "message": "Redirect to broker for manual authentication",
+                })
+            return jsonify({
+                "status": "error",
+                "message": f"Manual authentication is not supported for broker '{broker}'",
+            }), 400
 
         if broker in oauth_only_brokers:
             redirect_url = account.get("redirect_url") or ""
@@ -342,7 +363,7 @@ def authenticate_account(account_id):
 
         # For brokers that support both OAuth and TOTP: if auto-auth fields
         # are present, use TOTP; otherwise fall back to OAuth
-        if not can_auto_auth and broker in ("zerodha", "upstox", "flattrade", "dhan"):
+        if not can_auto_auth and broker in hybrid_manual_brokers:
             redirect_url = account.get("redirect_url") or ""
             api_key = account["broker_api_key"]
             auth_url = _get_oauth_url(broker, api_key, redirect_url)
