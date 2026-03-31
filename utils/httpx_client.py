@@ -186,26 +186,26 @@ def _create_http_client() -> httpx.Client:
         # a unique public IP for broker API whitelisting
         local_address = os.environ.get("OUTBOUND_SOURCE_IP", "").strip().strip("'\"")
 
-        client_kwargs = dict(
-            http2=http2_enabled,  # Disable HTTP/2 in standalone mode, enable in integrated mode
-            http1=True,  # Always enable HTTP/1.1 for compatibility
+        # Build transport with optional local_address binding
+        transport_kwargs = {}
+        if local_address:
+            transport_kwargs["local_address"] = local_address
+            logger.info(f"Binding outbound HTTP connections to local address: {local_address}")
+
+        transport = httpx.HTTPTransport(
+            http1=True,
+            http2=http2_enabled,
+            **transport_kwargs,
+        )
+
+        client = httpx.Client(
+            transport=transport,
             timeout=120.0,  # Increased timeout for large historical data requests
-            limits=httpx.Limits(
-                max_keepalive_connections=40,  # Increased from 20 for multi-strategy environments
-                max_connections=100,  # Increased from 50 for 10+ concurrent strategies
-                keepalive_expiry=30.0,  # Reduced from 120s to recycle stale connections faster
-            ),
             # Add verify parameter to handle SSL/TLS issues in standalone mode
             verify=True,  # Can be set to False for debugging SSL issues (not recommended for production)
             # Add event hooks for latency tracking
             event_hooks={"request": [log_request], "response": [log_response]},
         )
-
-        if local_address:
-            client_kwargs["local_address"] = local_address
-            logger.info(f"Binding outbound HTTP connections to local address: {local_address}")
-
-        client = httpx.Client(**client_kwargs)
 
         if is_standalone:
             logger.info("Running in standalone mode - HTTP/2 disabled for compatibility")
