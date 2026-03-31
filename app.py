@@ -451,6 +451,58 @@ def create_app():
             session.clear()
             # Don't redirect here, let individual routes handle it
 
+    # Track which account the env vars are currently configured for
+    # (single-worker process, so a module-level variable is safe)
+    _current_env_account_id = {"value": None}
+
+    @app.before_request
+    def restore_account_env():
+        """Restore broker account env vars after service restart.
+
+        The multi-account system sets BROKER_API_KEY etc. via os.environ
+        during authentication / account-switching, but after a service
+        restart those env vars revert to .env placeholders.  This hook
+        ensures the active account's credentials are always in the
+        environment before any broker module reads them.
+        """
+        from flask import request as req
+
+        # Fast-path: skip static/public/API routes
+        if (
+            req.path.startswith("/static/")
+            or req.path.startswith("/assets/")
+            or req.path.startswith("/api/")
+            or not session.get("logged_in")
+        ):
+            return
+
+        active_id = session.get("active_account_id")
+        if not active_id:
+            return
+
+        # If env is already configured for this account, nothing to do
+        if _current_env_account_id["value"] == active_id:
+            return
+
+        try:
+            from database.broker_account_db import get_broker_account
+            from blueprints.broker_accounts import _set_account_env
+
+            user = session.get("user")
+            if not user:
+                return
+
+            account = get_broker_account(active_id, user)
+            if account:
+                _set_account_env(account)
+                _current_env_account_id["value"] = active_id
+                logger.debug(
+                    f"Restored env vars for account {active_id} "
+                    f"(broker={account.get('broker')})"
+                )
+        except Exception as e:
+            logger.warning(f"Could not restore account env vars: {e}")
+
     @app.errorhandler(400)
     def csrf_error(error):
         """Custom handler for CSRF errors (400 Bad Request)"""
