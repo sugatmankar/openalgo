@@ -124,14 +124,17 @@ def place_order_api(data, auth):
     url = "https://piconnect.flattrade.in/PiConnectAPI/PlaceOrder"
     res = client.post(url, content=payload, headers=headers)
     response_data = res.json()
+    logger.info(f"PlaceOrder response: {response_data}")
 
     # Add status attribute for backward compatibility
     res.status = res.status_code
 
-    if response_data["stat"] == "Ok":
+    if response_data.get("stat") == "Ok":
         orderid = response_data["norenordno"]
     else:
         orderid = None
+        error_msg = response_data.get("emsg", "Unknown error")
+        logger.error(f"PlaceOrder failed: {error_msg}")
     return res, response_data, orderid
 
 

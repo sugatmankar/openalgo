@@ -237,7 +237,7 @@ def place_smart_order_with_auth(
             return True, order_response_data, 200
 
         # Log successful order immediately after placement
-        if res and res.status == 200:
+        if res and res.status == 200 and order_id is not None:
             order_response_data = {"status": "success", "orderid": order_id}
             bus.publish(OrderPlacedEvent(
                 mode="live", api_type="placesmartorder",
@@ -252,6 +252,13 @@ def place_smart_order_with_auth(
                 request_data=order_request_data, response_data=order_response_data,
                 api_key=api_key,
             ))
+        elif res and res.status == 200 and order_id is None:
+            # Broker returned HTTP 200 but rejected the order
+            message = "Failed to place smart order"
+            if isinstance(response_data, dict):
+                message = response_data.get("emsg") or response_data.get("message") or message
+            logger.error(f"Broker rejected smart order (HTTP 200 but no orderid): {response_data}")
+            order_response_data = {"status": "error", "message": message}
 
     except Exception as e:
         logger.error(f"Error in broker_module.place_smartorder_api: {e}")
@@ -274,14 +281,14 @@ def place_smart_order_with_auth(
         logger.error(f"Invalid SMART_ORDER_DELAY value: {smart_order_delay}")
         traceback.print_exc()
 
-    if res and res.status == 200:
+    if res and res.status == 200 and order_id is not None:
         return True, order_response_data, 200
     else:
-        message = (
-            response_data.get("message", "Failed to place smart order")
-            if isinstance(response_data, dict)
-            else "Failed to place smart order"
-        )
+        message = "Failed to place smart order"
+        if isinstance(response_data, dict):
+            message = response_data.get("emsg") or response_data.get("message") or message
+            if order_id is None and res and res.status == 200:
+                logger.error(f"Broker rejected smart order (HTTP 200 but no orderid): {response_data}")
         error_response = {"status": "error", "message": message}
         bus.publish(OrderFailedEvent(
             mode="live", api_type="placesmartorder",

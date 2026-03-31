@@ -214,7 +214,7 @@ def place_order_with_auth(
         ))
         return False, error_response, 500
 
-    if res.status == 200:
+    if res.status == 200 and order_id is not None:
         order_response_data = {"status": "success", "orderid": order_id}
 
         if emit_event:
@@ -236,11 +236,13 @@ def place_order_with_auth(
 
         return True, order_response_data, 200
     else:
-        message = (
-            response_data.get("message", "Failed to place order")
-            if isinstance(response_data, dict)
-            else "Failed to place order"
-        )
+        # Extract error message from broker response
+        message = "Failed to place order"
+        if isinstance(response_data, dict):
+            # Support both standard 'message' and broker-specific 'emsg' fields
+            message = response_data.get("emsg") or response_data.get("message") or message
+            if order_id is None and res.status == 200:
+                logger.error(f"Broker rejected order (HTTP 200 but no orderid): {response_data}")
         error_response = {"status": "error", "message": message}
         bus.publish(OrderFailedEvent(
             mode="live",
