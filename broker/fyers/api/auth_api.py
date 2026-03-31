@@ -441,23 +441,42 @@ def authenticate_broker_totp(
 
             # None worked — try additional approaches
 
-            # ── Method 6: Profile with -100 suffix (force legacy format) ──
+            # ── Method 6: Try using api.fyers.in instead of api-t1.fyers.in ──
+            # JWT iss=api.fyers.in, maybe -200 apps use a different API host
+            for api_host, host_label in [
+                ("https://api.fyers.in/api/v3", "api.fyers.in"),
+                ("https://api-t2.fyers.in/api/v3", "api-t2.fyers.in"),
+            ]:
+                try:
+                    test_resp6 = client.get(
+                        f"{api_host}/profile",
+                        headers={"Authorization": f"{broker_api_key}:{auth_jwt}"},
+                        timeout=10.0,
+                    )
+                    test_body6 = test_resp6.json()
+                    logger.info(f"Fyers -200 M6 profile ({host_label}): status={test_resp6.status_code}, s={test_body6.get('s')}, code={test_body6.get('code')}")
+                    if test_body6.get("s") == "ok":
+                        logger.info(f"Fyers -200: SUCCESS on {host_label}!")
+                        return auth_jwt, None
+                except Exception as e6:
+                    logger.warning(f"Fyers -200 M6 {host_label} failed: {e6}")
+
+            # ── Method 7: Use bearer_token from step 3 as access token ──
             try:
-                forced_key = f"{app_prefix}-100"
-                test_resp6 = client.get(
+                test_resp7 = client.get(
                     "https://api-t1.fyers.in/api/v3/profile",
-                    headers={"Authorization": f"{forced_key}:{auth_jwt}"},
+                    headers={"Authorization": f"{broker_api_key}:{bearer_token}"},
                     timeout=10.0,
                 )
-                test_body6 = test_resp6.json()
-                logger.info(f"Fyers -200 M6 profile (-100 forced): status={test_resp6.status_code}, s={test_body6.get('s')}, code={test_body6.get('code')}")
-                if test_body6.get("s") == "ok":
-                    logger.info("Fyers -200: SUCCESS with forced -100 suffix!")
-                    return auth_jwt, None
-            except Exception as e6:
-                logger.warning(f"Fyers -200 M6 failed: {e6}")
+                test_body7 = test_resp7.json()
+                logger.info(f"Fyers -200 M7 profile (bearer_token from step3): status={test_resp7.status_code}, s={test_body7.get('s')}, code={test_body7.get('code')}")
+                if test_body7.get("s") == "ok":
+                    logger.info("Fyers -200: SUCCESS with bearer_token as access_token!")
+                    return bearer_token, None
+            except Exception as e7:
+                logger.warning(f"Fyers -200 M7 failed: {e7}")
 
-            # ── Method 7: Use at_hash value as the token ──
+            # ── Method 8: Use at_hash with different API hosts ──
             try:
                 jwt_parts = auth_jwt.split(".")
                 if len(jwt_parts) >= 2:
@@ -465,46 +484,46 @@ def authenticate_broker_totp(
                     jwt_payload = json.loads(base64.urlsafe_b64decode(padded))
                     at_hash = jwt_payload.get("at_hash", "")
                     if at_hash:
-                        # Try at_hash as token with full client_id
-                        test_resp7 = client.get(
-                            "https://api-t1.fyers.in/api/v3/profile",
-                            headers={"Authorization": f"{broker_api_key}:{at_hash}"},
-                            timeout=10.0,
-                        )
-                        test_body7 = test_resp7.json()
-                        logger.info(f"Fyers -200 M7a at_hash+full_key: status={test_resp7.status_code}, s={test_body7.get('s')}, code={test_body7.get('code')}")
-                        if test_body7.get("s") == "ok":
-                            logger.info("Fyers -200: SUCCESS with at_hash as token!")
-                            return at_hash, None
+                        for api_host, host_label in [
+                            ("https://api-t1.fyers.in/api/v3", "api-t1"),
+                            ("https://api.fyers.in/api/v3", "api"),
+                        ]:
+                            test_resp8 = client.get(
+                                f"{api_host}/profile",
+                                headers={"Authorization": f"{broker_api_key}:{at_hash}"},
+                                timeout=10.0,
+                            )
+                            test_body8 = test_resp8.json()
+                            logger.info(f"Fyers -200 M8 at_hash ({host_label}): status={test_resp8.status_code}, s={test_body8.get('s')}, code={test_body8.get('code')}")
+                            if test_body8.get("s") == "ok":
+                                logger.info(f"Fyers -200: SUCCESS with at_hash on {host_label}!")
+                                return at_hash, None
+            except Exception as e8:
+                logger.warning(f"Fyers -200 M8 at_hash alt host failed: {e8}")
 
-                        # Try at_hash with -100 suffix
-                        forced_key = f"{app_prefix}-100"
-                        test_resp7b = client.get(
-                            "https://api-t1.fyers.in/api/v3/profile",
-                            headers={"Authorization": f"{forced_key}:{at_hash}"},
-                            timeout=10.0,
-                        )
-                        test_body7b = test_resp7b.json()
-                        logger.info(f"Fyers -200 M7b at_hash+-100: status={test_resp7b.status_code}, s={test_body7b.get('s')}, code={test_body7b.get('code')}")
-                        if test_body7b.get("s") == "ok":
-                            logger.info("Fyers -200: SUCCESS with at_hash + -100 suffix!")
-                            return at_hash, None
+            # ── Method 9: Use Bearer header format (not client_id:token) ──
+            try:
+                for auth_val, desc in [
+                    (f"Bearer {auth_jwt}", "Bearer JWT"),
+                    (f"Bearer {bearer_token}", "Bearer step3_token"),
+                ]:
+                    test_resp9 = client.get(
+                        "https://api-t1.fyers.in/api/v3/profile",
+                        headers={"Authorization": auth_val},
+                        timeout=10.0,
+                    )
+                    test_body9 = test_resp9.json()
+                    logger.info(f"Fyers -200 M9 profile ({desc}): status={test_resp9.status_code}, s={test_body9.get('s')}, code={test_body9.get('code')}")
+                    if test_body9.get("s") == "ok":
+                        logger.info(f"Fyers -200: SUCCESS with {desc}!")
+                        if "JWT" in desc:
+                            return auth_jwt, None
+                        else:
+                            return bearer_token, None
+            except Exception as e9:
+                logger.warning(f"Fyers -200 M9 Bearer failed: {e9}")
 
-                        # Try at_hash with prefix only
-                        test_resp7c = client.get(
-                            "https://api-t1.fyers.in/api/v3/profile",
-                            headers={"Authorization": f"{app_prefix}:{at_hash}"},
-                            timeout=10.0,
-                        )
-                        test_body7c = test_resp7c.json()
-                        logger.info(f"Fyers -200 M7c at_hash+prefix: status={test_resp7c.status_code}, s={test_body7c.get('s')}, code={test_body7c.get('code')}")
-                        if test_body7c.get("s") == "ok":
-                            logger.info("Fyers -200: SUCCESS with at_hash + prefix only!")
-                            return at_hash, None
-            except Exception as e7:
-                logger.warning(f"Fyers -200 M7 at_hash failed: {e7}")
-
-            logger.warning("Fyers -200: ALL 7 methods failed. Returning data.auth JWT as fallback.")
+            logger.warning("Fyers -200: ALL methods (M1-M9) failed. Returning data.auth JWT as fallback.")
             return auth_jwt, None
 
         return None, f"Fyers auth code generation failed: {res4_data.get('message', str(res4_data))}"
