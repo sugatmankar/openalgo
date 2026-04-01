@@ -106,12 +106,64 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
     return net_qty
 
 
+def _fetch_ltp_for_limit(symbol, exchange, token, auth_token):
+    """Fetch LTP from Flattrade quotes API for MARKET→LIMIT conversion.
+    Returns LTP as string, or None if unavailable."""
+    try:
+        api_key = get_flattrade_userid()
+
+        # Map exchange for index symbols
+        quote_exchange = exchange
+        if exchange == "NSE_INDEX":
+            quote_exchange = "NSE"
+        elif exchange == "BSE_INDEX":
+            quote_exchange = "BSE"
+
+        payload_data = {
+            "uid": api_key,
+            "actid": api_key,
+            "exch": quote_exchange,
+            "token": token,
+        }
+        payload_str = "jData=" + json.dumps(payload_data) + "&jKey=" + auth_token
+        client = get_httpx_client()
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        url = "https://piconnect.flattrade.in/PiConnectAPI/GetQuotes"
+        res = client.post(url, content=payload_str, headers=headers)
+        quote_data = res.json()
+
+        if quote_data.get("stat") == "Ok":
+            ltp = float(quote_data.get("lp", 0))
+            if ltp > 0:
+                logger.info(f"[MKT→LMT] Fetched LTP={ltp} for {symbol} on {exchange}")
+                return str(ltp)
+            else:
+                logger.warning(f"[MKT→LMT] LTP is 0 for {symbol} on {exchange}")
+        else:
+            logger.warning(f"[MKT→LMT] GetQuotes failed for {symbol}: {quote_data.get('emsg', 'Unknown')}")
+    except Exception as e:
+        logger.error(f"[MKT→LMT] Error fetching LTP for {symbol}: {e}")
+    return None
+
+
 def place_order_api(data, auth):
     AUTH_TOKEN = auth
 
     BROKER_API_KEY = get_flattrade_userid()
     data["apikey"] = BROKER_API_KEY
     token = get_token(data["symbol"], data["exchange"])
+
+    # Flattrade rejects MARKET orders via API (ALGO_CHK: MKT Order type not allowed)
+    # Auto-convert MARKET to LIMIT with LTP as the limit price
+    if data.get("pricetype") == "MARKET":
+        ltp = _fetch_ltp_for_limit(data["symbol"], data["exchange"], token, AUTH_TOKEN)
+        if ltp:
+            logger.info(f"[MKT→LMT] Converting MARKET to LIMIT at LTP={ltp} for {data['symbol']}")
+            data["pricetype"] = "LIMIT"
+            data["price"] = ltp
+        else:
+            logger.warning(f"[MKT→LMT] Could not fetch LTP for {data['symbol']}, sending as MARKET (may be rejected)")
+
     newdata = transform_data(data, token, AUTH_TOKEN)
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
