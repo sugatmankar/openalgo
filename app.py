@@ -177,6 +177,7 @@ from cors import cors  # Import the CORS instance
 from csp import apply_csp_middleware  # Import the CSP middleware
 from database.action_center_db import init_db as ensure_action_center_tables_exists
 from database.analyzer_db import init_db as ensure_analyzer_tables_exists
+from database.broker_account_db import init_db as ensure_broker_account_tables_exists
 from database.apilog_db import init_db as ensure_api_log_tables_exists
 from database.auth_db import init_db as ensure_auth_tables_exists
 from database.chartink_db import init_db as ensure_chartink_tables_exists
@@ -642,6 +643,7 @@ def setup_environment(app):
             db_init_functions = [
                 ("Auth DB", ensure_auth_tables_exists),
                 ("User DB", ensure_user_tables_exists),
+                ("Broker Accounts DB", ensure_broker_account_tables_exists),
                 ("Master Contract DB", ensure_master_contract_tables_exists),
                 ("API Log DB", ensure_api_log_tables_exists),
                 ("Analyzer DB", ensure_analyzer_tables_exists),
