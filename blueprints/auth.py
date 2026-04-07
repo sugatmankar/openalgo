@@ -100,6 +100,60 @@ def check_setup_required():
     return jsonify({"status": "success", "needs_setup": needs_setup})
 
 
+def _restore_default_broker_account(username):
+    """
+    After login, automatically restore the user's default broker account
+    into the session so the dashboard works immediately without requiring
+    a manual 'Set Active' click. This also enables cross-device persistence.
+    """
+    try:
+        from database.broker_account_db import get_default_account
+        from database.auth_db import get_auth_token, get_feed_token
+
+        account = get_default_account(username)
+        if not account:
+            logger.info(f"No default broker account found for user '{username}'")
+            return
+
+        account_id = account["id"]
+        broker = account["broker"]
+        auth_key = f"{username}__acct_{account_id}"
+
+        auth_token = get_auth_token(auth_key)
+        if not auth_token:
+            # Try legacy key as fallback
+            auth_token = get_auth_token(username)
+
+        if not auth_token:
+            logger.info(
+                f"No auth token for default account {account_id} ({broker}). "
+                f"User will need to re-authenticate."
+            )
+            return
+
+        # Restore session state
+        session["active_account_id"] = account_id
+        session["broker"] = broker
+        session["AUTH_TOKEN"] = auth_token
+
+        feed_token = get_feed_token(auth_key)
+        if feed_token:
+            session["FEED_TOKEN"] = feed_token
+
+        # Restore env vars for broker operations
+        os.environ["BROKER_API_KEY"] = account.get("broker_api_key", "")
+        os.environ["BROKER_API_SECRET"] = account.get("broker_api_secret", "")
+        if account.get("redirect_url"):
+            os.environ["REDIRECT_URL"] = account["redirect_url"]
+
+        logger.info(
+            f"Auto-restored default account {account_id} ({broker}) "
+            f"for user '{username}'"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to restore default broker account: {e}")
+
+
 @auth_bp.route("/login", methods=["GET", "POST"])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
@@ -136,6 +190,10 @@ def login():
             session.pop("broker", None)
             set_session_login_time()
             logger.info(f"Login success for user: {username}")
+
+            # Auto-restore the user's default (last-active) broker account
+            _restore_default_broker_account(username)
+
             return jsonify({"status": "success", "redirect": "/dashboard"}), 200
         else:
             return jsonify({"status": "error", "message": "Invalid credentials"}), 401

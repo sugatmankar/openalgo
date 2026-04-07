@@ -80,6 +80,7 @@ class BrokerAccount(Base):
 
     is_active = Column(Boolean, default=True)
     is_authenticated = Column(Boolean, default=False)  # True after successful broker login
+    is_default = Column(Boolean, default=False)  # True for the user's currently-active account
     created_at = Column(DateTime(timezone=True), default=func.now())
     updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
@@ -119,6 +120,7 @@ def _migrate_new_columns():
         "connection_status": "VARCHAR(20) DEFAULT 'disconnected'",
         "error_message": "TEXT",
         "last_connected_at": "DATETIME",
+        "is_default": "BOOLEAN DEFAULT 0",
     }
 
     with engine.connect() as conn:
@@ -399,6 +401,7 @@ def _account_to_dict(account, decrypt=False):
         "last_connected_at": _utc_isoformat(account.last_connected_at),
         "is_active": account.is_active,
         "is_authenticated": account.is_authenticated,
+        "is_default": getattr(account, "is_default", False) or False,
         "created_at": _utc_isoformat(account.created_at),
         "updated_at": _utc_isoformat(account.updated_at),
     }
@@ -427,3 +430,37 @@ def _account_to_dict(account, decrypt=False):
         })
 
     return base
+
+
+def set_default_account(user, account_id):
+    """Mark one account as the default (active) for the user, clearing others."""
+    try:
+        # Clear existing default
+        BrokerAccount.query.filter_by(user=user, is_default=True).update(
+            {"is_default": False}
+        )
+        # Set the new default
+        account = BrokerAccount.query.filter_by(id=account_id, user=user).first()
+        if account:
+            account.is_default = True
+            db_session.commit()
+            logger.info(f"Set account {account_id} as default for user '{user}'")
+            return True
+        db_session.rollback()
+        return False
+    except Exception as e:
+        db_session.rollback()
+        logger.exception(f"Error setting default account: {e}")
+        return False
+
+
+def get_default_account(user):
+    """Get the user's default (active) broker account. Returns dict with decrypted creds or None."""
+    account = BrokerAccount.query.filter_by(user=user, is_default=True, is_active=True).first()
+    if account:
+        return _account_to_dict(account, decrypt=True)
+    # Fallback: if there's exactly one account, treat it as default
+    accounts = BrokerAccount.query.filter_by(user=user, is_active=True).all()
+    if len(accounts) == 1:
+        return _account_to_dict(accounts[0], decrypt=True)
+    return None

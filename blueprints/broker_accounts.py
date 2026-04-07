@@ -474,6 +474,10 @@ def set_active_account(account_id):
         if feed_token:
             session["FEED_TOKEN"] = feed_token
 
+        # Persist default account selection in database (survives cross-device logins)
+        from database.broker_account_db import set_default_account
+        set_default_account(user, account_id)
+
         # Set account credentials in env for broker operations
         _set_account_env(account)
 
