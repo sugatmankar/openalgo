@@ -173,7 +173,7 @@ def login():
         # Check if already logged in
         if "user" in session:
             return jsonify(
-                {"status": "success", "message": "Already logged in", "redirect": "/broker"}
+                {"status": "success", "message": "Already logged in", "redirect": "/dashboard"}
             ), 200
 
         if session.get("logged_in"):
@@ -203,7 +203,7 @@ def login():
         return redirect("/setup")
 
     if "user" in session:
-        return redirect("/broker")
+        return redirect("/dashboard")
 
     if session.get("logged_in"):
         return redirect("/dashboard")
@@ -221,8 +221,8 @@ def broker_login():
         if "user" not in session:
             return redirect("/login")
 
-        # Redirect to React broker selection page
-        return redirect("/broker")
+        # Broker-accounts system handles broker selection now
+        return redirect("/dashboard")
 
 
 @auth_bp.route("/reset-password", methods=["GET", "POST"])
