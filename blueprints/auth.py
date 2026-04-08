@@ -134,6 +134,7 @@ def _restore_default_broker_account(username):
         # Restore session state
         session["active_account_id"] = account_id
         session["broker"] = broker
+        session["logged_in"] = True
         session["AUTH_TOKEN"] = auth_token
 
         feed_token = get_feed_token(auth_key)
@@ -202,11 +203,13 @@ def login():
     if find_user_by_username() is None:
         return redirect("/setup")
 
-    if "user" in session:
-        return redirect("/dashboard")
-
     if session.get("logged_in"):
         return redirect("/dashboard")
+
+    # If user is in session but not logged_in, it's a stale session - clear it
+    if "user" in session and not session.get("logged_in"):
+        logger.info(f"Stale session detected for user '{session.get('user')}' on GET /login - clearing")
+        session.clear()
 
     return redirect("/login")
 
@@ -583,6 +586,10 @@ def get_session_status():
             {"status": "success", "message": "Not authenticated", "authenticated": False, "logged_in": False}
         ), 200
 
+    # If user is in session but broker is missing, try restoring from DB
+    if not session.get("broker") or not session.get("logged_in"):
+        _restore_default_broker_account(session["user"])
+
     # If session claims to be logged in with broker, validate the auth token exists
     if session.get("logged_in") and session.get("broker"):
         from database.auth_db import get_api_key_for_tradingview, get_auth_token
@@ -734,6 +741,11 @@ def get_dashboard_data():
     broker = session.get("broker")
 
     if not broker:
+        # Try to restore default broker account from DB
+        _restore_default_broker_account(login_username)
+        broker = session.get("broker")
+
+    if not broker:
         return jsonify({"status": "error", "message": "Broker not set in session"}), 400
 
     try:
@@ -741,7 +753,12 @@ def get_dashboard_data():
         from database.settings_db import get_analyze_mode
         from services.funds_service import get_funds
 
-        AUTH_TOKEN = get_auth_token(login_username)
+        # Try per-account key first, fall back to legacy username key
+        active_id = session.get("active_account_id")
+        auth_key = f"{login_username}__acct_{active_id}" if active_id else login_username
+        AUTH_TOKEN = get_auth_token(auth_key)
+        if not AUTH_TOKEN:
+            AUTH_TOKEN = get_auth_token(login_username)
 
         if AUTH_TOKEN is None:
             logger.warning(f"No auth token found for user {login_username}")
