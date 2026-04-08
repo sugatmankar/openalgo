@@ -234,6 +234,12 @@ def react_straddle():
     return serve_react_app()
 
 
+# Combined Premium Chart - Multi-leg option strategy premium
+@react_bp.route("/combine-premium")
+def react_combine_premium():
+    return serve_react_app()
+
+
 # Vol Surface - 3D Implied Volatility surface
 @react_bp.route("/volsurface")
 def react_volsurface():
