@@ -387,7 +387,7 @@ def process_delta_products(products):
         token          ← id                    (int → str)
         brsymbol       ← symbol                (Delta-native, e.g. "C-BTC-80000-280225")
         symbol         ← canonical             (OpenAlgo format, e.g. "BTC28FEB2580000CE")
-        name           ← description
+        name           ← underlying_asset.symbol (e.g. BTC, ETH — for option chain tools)
         exchange       ← "CRYPTO"              (OpenAlgo exchange abstraction)
         brexchange     ← "DELTAIN"             (broker identifier — Delta Exchange India)
         expiry         ← settlement_time       (None → "" for perpetuals;
@@ -472,12 +472,26 @@ def process_delta_products(products):
         # Build OpenAlgo canonical symbol (exchange = CRYPTO, broker-agnostic format)
         canonical_symbol = _to_canonical_symbol(symbol_str, instrument_type, expiry)
 
+        # Extract underlying asset name for the 'name' field.
+        # For Indian brokers, 'name' stores the underlying (e.g. "NIFTY", "BANKNIFTY").
+        # Tools like Option Chain, Straddle Chart use get_distinct_underlyings()
+        # which queries this field to build underlying dropdowns.
+        underlying_asset = p.get("underlying_asset") or {}
+        underlying_name = underlying_asset.get("symbol", "").upper()
+        if not underlying_name:
+            # Fallback: parse from brsymbol (e.g. C-BTC-80000-280225 → BTC)
+            parts_name = symbol_str.split("-")
+            if len(parts_name) >= 2 and instrument_type in ("CE", "PE", "TCE", "TPE", "SYNCE", "SYNPE"):
+                underlying_name = parts_name[1].upper()
+            else:
+                underlying_name = p.get("description", symbol_str)
+
         rows.append(
             {
                 "token": str(p["id"]),
                 "symbol": canonical_symbol,   # OpenAlgo canonical (e.g. BTC28FEB2580000CE)
                 "brsymbol": symbol_str,        # Delta-native (e.g. C-BTC-80000-280225)
-                "name": p.get("description", symbol_str),
+                "name": underlying_name,       # Underlying asset (e.g. BTC, ETH) — used by option chain tools
                 "exchange": "CRYPTO",          # OpenAlgo exchange abstraction
                 "brexchange": "DELTAIN",       # Broker identifier (Delta Exchange India)
                 "expiry": expiry,
