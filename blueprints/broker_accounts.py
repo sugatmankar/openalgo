@@ -668,6 +668,7 @@ BROKER_AUTO_AUTH_FIELDS = {
     "tradejini": ["password", "totp_key"],                # password, twofa(totp)
     "samco": ["year_of_birth"],                           # yob (no totp_key needed)
     # Auto-auth brokers (env-only, no user fields needed from form):
+    "deltaexchange": [],
     "fivepaisaxts": [],
     "dhan_sandbox": [],
     "groww": [],
@@ -842,7 +843,7 @@ def _auto_authenticate_totp(account_id, user, broker, account):
             elif broker in ("ibulls", "iifl", "jainamxts", "wisdom"):
                 auth_token, feed_token, user_id_from_broker, error_message = auth_function(broker)
 
-            elif broker in ("dhan_sandbox", "groww", "indmoney"):
+            elif broker in ("deltaexchange", "dhan_sandbox", "groww", "indmoney"):
                 auth_token, error_message = auth_function(broker)
 
             else:
