@@ -357,6 +357,13 @@ def authenticate_account(account_id):
                 "message": "Redirect to broker for authentication",
             })
 
+        # Direct-auth brokers (API key + secret only, no TOTP/OAuth)
+        # These brokers authenticate via signed API requests using stored credentials.
+        direct_auth_brokers = {"deltaexchange"}
+        if broker in direct_auth_brokers:
+            result = _direct_authenticate(account_id, session["user"], broker, account)
+            return jsonify(result), 200 if result.get("status") == "success" else 401
+
         # TOTP broker — check if we can auto-authenticate
         totp_key = account.get("totp_key", "")
         can_auto_auth = _broker_has_auto_auth_support(broker, account)
@@ -668,7 +675,6 @@ BROKER_AUTO_AUTH_FIELDS = {
     "tradejini": ["password", "totp_key"],                # password, twofa(totp)
     "samco": ["year_of_birth"],                           # yob (no totp_key needed)
     # Auto-auth brokers (env-only, no user fields needed from form):
-    "deltaexchange": [],
     "fivepaisaxts": [],
     "dhan_sandbox": [],
     "groww": [],
@@ -843,7 +849,7 @@ def _auto_authenticate_totp(account_id, user, broker, account):
             elif broker in ("ibulls", "iifl", "jainamxts", "wisdom"):
                 auth_token, feed_token, user_id_from_broker, error_message = auth_function(broker)
 
-            elif broker in ("deltaexchange", "dhan_sandbox", "groww", "indmoney"):
+            elif broker in ("dhan_sandbox", "groww", "indmoney"):
                 auth_token, error_message = auth_function(broker)
 
             else:
@@ -920,6 +926,108 @@ def _auto_authenticate_totp(account_id, user, broker, account):
             logger.exception(f"Auto-auth failed for account {account_id} ({broker}): {e}")
             update_connection_status(account_id, user, "error", str(e))
             return {"status": "error", "message": f"Auto-auth error: {str(e)}"}
+
+
+def _direct_authenticate(account_id, user, broker, account):
+    """
+    Authenticate a direct-auth broker (API key + secret only, no TOTP/OAuth).
+    Sets env vars from stored credentials and calls the broker auth function.
+    Returns a dict with status/message.
+    """
+    from flask import current_app
+    from database.broker_account_db import update_connection_status, mark_account_authenticated
+
+    MAX_RETRIES = 2
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            # Ensure env vars are set from stored account credentials
+            _set_account_env(account)
+
+            # Set target broker
+            from database.token_db_enhanced import get_cache
+            get_cache().set_target_broker(broker)
+
+            # Get the broker auth function
+            broker_auth_functions = current_app.broker_auth_functions
+            auth_function = broker_auth_functions.get(f"{broker}_auth")
+            if not auth_function:
+                update_connection_status(account_id, user, "error", "Auth function not found")
+                return {"status": "error", "message": f"Auth function not found for broker '{broker}'"}
+
+            # Call broker auth directly — no TOTP, no OAuth redirect
+            auth_token, error_message = auth_function(broker)
+
+            if auth_token:
+                # Store auth token
+                from database.auth_db import upsert_auth
+                auth_key = f"{user}__acct_{account_id}"
+                upsert_auth(auth_key, auth_token, broker)
+                upsert_auth(user, auth_token, broker)
+
+                # Update account status
+                update_connection_status(account_id, user, "connected")
+
+                # Update session
+                session["broker"] = broker
+                session["AUTH_TOKEN"] = auth_token
+
+                logger.info(f"Direct auth successful for account {account_id} ({broker})")
+
+                # Trigger master contract download
+                try:
+                    from database.master_contract_status_db import init_broker_status
+                    from utils.auth_utils import (
+                        should_download_master_contract,
+                        async_master_contract_download,
+                        load_existing_master_contract,
+                    )
+                    from threading import Thread
+
+                    init_broker_status(broker)
+                    should_download, reason = should_download_master_contract(broker)
+                    logger.info(
+                        f"Smart download check for {broker}: "
+                        f"should_download={should_download}, reason={reason}"
+                    )
+                    if should_download:
+                        Thread(target=async_master_contract_download, args=(broker,), daemon=True).start()
+                    else:
+                        logger.info(f"Skipping download for {broker}: {reason}")
+                        Thread(target=load_existing_master_contract, args=(broker,), daemon=True).start()
+                except Exception as mc_err:
+                    logger.warning(f"Master contract download trigger failed: {mc_err}")
+
+                return {
+                    "status": "success",
+                    "auth_type": "direct",
+                    "message": f"Authenticated with {broker} successfully",
+                }
+            else:
+                if attempt < MAX_RETRIES:
+                    logger.warning(
+                        f"Direct auth attempt {attempt} failed for {broker}: "
+                        f"{error_message}, retrying..."
+                    )
+                    time.sleep(2)
+                    continue
+                update_connection_status(account_id, user, "error", error_message)
+                return {
+                    "status": "error",
+                    "auth_type": "direct",
+                    "message": error_message or "Authentication failed",
+                }
+
+        except Exception as e:
+            if attempt < MAX_RETRIES:
+                logger.warning(
+                    f"Direct auth attempt {attempt} exception for {broker}: {e}, retrying..."
+                )
+                time.sleep(2)
+                continue
+            logger.exception(f"Direct auth failed for account {account_id} ({broker}): {e}")
+            update_connection_status(account_id, user, "error", str(e))
+            return {"status": "error", "message": f"Direct auth error: {str(e)}"}
 
 
 def _get_oauth_url(broker, api_key, redirect_url):
