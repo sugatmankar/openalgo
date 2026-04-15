@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import pytz
 
+from database.token_db_enhanced import fno_search_symbols
 from services.history_service import get_history
 from services.option_symbol_service import (
     construct_option_symbol,
@@ -19,6 +20,7 @@ from services.option_symbol_service import (
     get_option_exchange,
 )
 from services.quotes_service import get_quotes
+from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -39,6 +41,9 @@ def _get_quote_exchange(base_symbol, underlying_exchange):
         return "BSE_INDEX"
     if underlying_exchange.upper() in ("NFO", "BFO"):
         return "NSE" if underlying_exchange.upper() == "NFO" else "BSE"
+    # Crypto options — underlying is on the same exchange
+    if underlying_exchange.upper() in CRYPTO_EXCHANGES:
+        return underlying_exchange.upper()
     return underlying_exchange.upper()
 
 
@@ -116,9 +121,27 @@ def get_combine_premium_data(
         quote_exchange = _get_quote_exchange(base_symbol, exchange)
         options_exchange = get_option_exchange(quote_exchange)
 
+        # CRYPTO: look up the canonical perpetual symbol (e.g. BTC -> BTCUSDFUT)
+        if exchange.upper() in CRYPTO_EXCHANGES:
+            _perp = fno_search_symbols(
+                query=f"{base_symbol}USDFUT",
+                exchange=exchange,
+                instrumenttype=INSTRUMENT_PERPFUT,
+                limit=1,
+            )
+            if not _perp:
+                return (
+                    False,
+                    {"status": "error", "message": f"No perpetual futures found for {base_symbol} on {exchange}"},
+                    404,
+                )
+            underlying_quote_symbol = _perp[0]["symbol"]
+        else:
+            underlying_quote_symbol = base_symbol
+
         # Fetch underlying history for spot price
         success_u, resp_u, _ = get_history(
-            symbol=base_symbol,
+            symbol=underlying_quote_symbol,
             exchange=quote_exchange,
             interval=interval,
             start_date=start_date_str,
@@ -218,7 +241,7 @@ def get_combine_premium_data(
 
         # Get current LTP
         success_q, quote_resp, _ = get_quotes(
-            symbol=base_symbol,
+            symbol=underlying_quote_symbol,
             exchange=quote_exchange,
             api_key=api_key,
         )
