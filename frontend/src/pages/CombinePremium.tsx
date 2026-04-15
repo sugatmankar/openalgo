@@ -9,6 +9,7 @@ import {
   type ISeriesApi,
 } from 'lightweight-charts'
 import { useThemeStore } from '@/stores/themeStore'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { oiProfileApi } from '@/api/oi-profile'
 import {
   combinePremiumApi,
@@ -36,15 +37,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { showToast } from '@/utils/toast'
 
-const FNO_EXCHANGES = [
-  { value: 'NFO', label: 'NFO' },
-  { value: 'BFO', label: 'BFO' },
-]
-
-const DEFAULT_UNDERLYINGS: Record<string, string[]> = {
-  NFO: ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'],
-  BFO: ['SENSEX', 'BANKEX'],
-}
+// FNO_EXCHANGES and DEFAULT_UNDERLYINGS are now provided by useSupportedExchanges() hook
 
 const CHART_HEIGHT = 500
 
@@ -92,13 +85,14 @@ export default function CombinePremium() {
   const { mode, appMode } = useThemeStore()
   const isDarkMode = mode === 'dark'
   const isAnalyzer = appMode === 'analyzer'
+  const { fnoExchanges, defaultFnoExchange, defaultUnderlyings } = useSupportedExchanges()
 
   // Control state
   const [isLoading, setIsLoading] = useState(false)
-  const [selectedExchange, setSelectedExchange] = useState('NFO')
-  const [underlyings, setUnderlyings] = useState<string[]>(DEFAULT_UNDERLYINGS.NFO)
+  const [selectedExchange, setSelectedExchange] = useState(defaultFnoExchange)
+  const [underlyings, setUnderlyings] = useState<string[]>(defaultUnderlyings[defaultFnoExchange] || [])
   const [underlyingOpen, setUnderlyingOpen] = useState(false)
-  const [selectedUnderlying, setSelectedUnderlying] = useState('NIFTY')
+  const [selectedUnderlying, setSelectedUnderlying] = useState(defaultUnderlyings[defaultFnoExchange]?.[0] || '')
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState('')
   const [intervals, setIntervals] = useState<string[]>([])
@@ -175,6 +169,13 @@ export default function CombinePremium() {
     fetchIntervals()
   }, [])
 
+  // Re-sync exchange when broker capabilities load asynchronously
+  useEffect(() => {
+    setSelectedExchange((prev) =>
+      prev && fnoExchanges.some((ex) => ex.value === prev) ? prev : defaultFnoExchange
+    )
+  }, [defaultFnoExchange, fnoExchanges])
+
   // Fetch underlyings when exchange changes
   useEffect(() => {
     const fetchUnderlyings = async () => {
@@ -186,10 +187,10 @@ export default function CombinePremium() {
             setSelectedUnderlying(resp.underlyings[0])
           }
         } else {
-          setUnderlyings(DEFAULT_UNDERLYINGS[selectedExchange] || [])
+          setUnderlyings(defaultUnderlyings[selectedExchange] || [])
         }
       } catch {
-        setUnderlyings(DEFAULT_UNDERLYINGS[selectedExchange] || [])
+        setUnderlyings(defaultUnderlyings[selectedExchange] || [])
       }
     }
     fetchUnderlyings()
@@ -474,7 +475,7 @@ export default function CombinePremium() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {FNO_EXCHANGES.map((e) => (
+                  {fnoExchanges.map((e) => (
                     <SelectItem key={e.value} value={e.value}>{e.label}</SelectItem>
                   ))}
                 </SelectContent>
