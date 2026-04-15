@@ -577,6 +577,7 @@ def get_available_brokers():
         {"id": "aliceblue", "name": "Alice Blue", "auth_type": "totp"},
         {"id": "angel", "name": "Angel One", "auth_type": "totp"},
         {"id": "compositedge", "name": "CompositEdge", "auth_type": "oauth"},
+        {"id": "deltaexchange", "name": "Delta Exchange", "auth_type": "totp"},
         {"id": "dhan", "name": "Dhan", "auth_type": "oauth"},
         {"id": "dhan_sandbox", "name": "Dhan (Sandbox)", "auth_type": "totp"},
         {"id": "definedge", "name": "Definedge", "auth_type": "totp"},
