@@ -10,6 +10,7 @@ import {
 } from 'lightweight-charts'
 import { useThemeStore } from '@/stores/themeStore'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import { calculateEMA, calculateVWAP } from '@/utils/indicators'
 import { oiProfileApi } from '@/api/oi-profile'
 import {
   combinePremiumApi,
@@ -111,18 +112,27 @@ export default function CombinePremium() {
   // Series visibility
   const [showCombined, setShowCombined] = useState(true)
   const [showSpot, setShowSpot] = useState(false)
+  const [showEma5, setShowEma5] = useState(true)
+  const [showEma15, setShowEma15] = useState(true)
+  const [showVwap, setShowVwap] = useState(true)
 
   // Chart refs
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const combinedSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const spotSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
+  const ema5SeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
+  const ema15SeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
+  const vwapSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   // Tooltip state
   const [tooltipData, setTooltipData] = useState<{
     visible: boolean
     x: number
     y: number
     point: CombinePremiumDataPoint | null
+    ema5?: number
+    ema15?: number
+    vwap?: number
   }>({ visible: false, x: 0, y: 0, point: null })
 
   // Chart colors
@@ -134,6 +144,9 @@ export default function CombinePremium() {
         grid: isDarkMode ? '#2d2640' : '#e9d5ff',
         combined: '#22c55e',
         spot: isDarkMode ? '#e2e8f0' : '#334155',
+        ema5: '#f59e0b',
+        ema15: '#06b6d4',
+        vwap: '#a855f7',
       }
     }
     return {
@@ -142,6 +155,9 @@ export default function CombinePremium() {
       grid: isDarkMode ? '#313244' : '#e2e8f0',
       combined: '#22c55e',
       spot: isDarkMode ? '#e2e8f0' : '#334155',
+      ema5: isDarkMode ? '#f59e0b' : '#d97706',
+      ema15: isDarkMode ? '#06b6d4' : '#0891b2',
+      vwap: isDarkMode ? '#a855f7' : '#9333ea',
     }
   }, [isDarkMode, isAnalyzer])
 
@@ -371,6 +387,45 @@ export default function CombinePremium() {
     })
     spotSeriesRef.current = spotSeries
 
+    // EMA 5 series (right Y-axis, same as combined premium)
+    const ema5Series = chart.addSeries(LineSeries, {
+      color: chartColors.ema5,
+      lineWidth: 1,
+      lineStyle: 0,
+      priceScaleId: 'right',
+      title: 'EMA 5',
+      lastValueVisible: false,
+      priceLineVisible: false,
+      visible: showEma5,
+    })
+    ema5SeriesRef.current = ema5Series
+
+    // EMA 15 series (right Y-axis, same as combined premium)
+    const ema15Series = chart.addSeries(LineSeries, {
+      color: chartColors.ema15,
+      lineWidth: 1,
+      lineStyle: 0,
+      priceScaleId: 'right',
+      title: 'EMA 15',
+      lastValueVisible: false,
+      priceLineVisible: false,
+      visible: showEma15,
+    })
+    ema15SeriesRef.current = ema15Series
+
+    // VWAP series (right Y-axis, same as combined premium, dotted)
+    const vwapSeries = chart.addSeries(LineSeries, {
+      color: chartColors.vwap,
+      lineWidth: 1,
+      lineStyle: 1, // Dotted
+      priceScaleId: 'right',
+      title: 'VWAP',
+      lastValueVisible: false,
+      priceLineVisible: false,
+      visible: showVwap,
+    })
+    vwapSeriesRef.current = vwapSeries
+
     // Set data
     const combinedData = chartData.series.map((p) => ({
       time: p.time as import('lightweight-charts').UTCTimestamp,
@@ -384,6 +439,33 @@ export default function CombinePremium() {
     combinedSeries.setData(combinedData)
     spotSeries.setData(spotData)
 
+    // Calculate and apply EMA/VWAP on combined premium values
+    const combinedTimeSeries = combinedData.map((p) => ({ time: p.time as number, value: p.value }))
+
+    const ema5Data = calculateEMA(combinedTimeSeries, 5)
+    ema5Series.setData(
+      ema5Data.map((p) => ({
+        time: p.time as import('lightweight-charts').UTCTimestamp,
+        value: p.value,
+      }))
+    )
+
+    const ema15Data = calculateEMA(combinedTimeSeries, 15)
+    ema15Series.setData(
+      ema15Data.map((p) => ({
+        time: p.time as import('lightweight-charts').UTCTimestamp,
+        value: p.value,
+      }))
+    )
+
+    const vwapData = calculateVWAP(combinedTimeSeries)
+    vwapSeries.setData(
+      vwapData.map((p) => ({
+        time: p.time as import('lightweight-charts').UTCTimestamp,
+        value: p.value,
+      }))
+    )
+
     chart.timeScale().fitContent()
 
     // Crosshair tooltip
@@ -396,11 +478,19 @@ export default function CombinePremium() {
       const time = param.time as number
       const point = chartData.series.find((p) => p.time === time)
       if (point) {
+        // Extract indicator values from series data
+        const ema5Val = ema5SeriesRef.current ? param.seriesData.get(ema5SeriesRef.current) : undefined
+        const ema15Val = ema15SeriesRef.current ? param.seriesData.get(ema15SeriesRef.current) : undefined
+        const vwapVal = vwapSeriesRef.current ? param.seriesData.get(vwapSeriesRef.current) : undefined
+
         setTooltipData({
           visible: true,
           x: param.point.x,
           y: param.point.y,
           point,
+          ema5: ema5Val && 'value' in ema5Val ? (ema5Val.value as number) : undefined,
+          ema15: ema15Val && 'value' in ema15Val ? (ema15Val.value as number) : undefined,
+          vwap: vwapVal && 'value' in vwapVal ? (vwapVal.value as number) : undefined,
         })
       }
     })
@@ -422,7 +512,7 @@ export default function CombinePremium() {
         chartRef.current = null
       }
     }
-  }, [chartData, chartColors, showCombined, showSpot])
+  }, [chartData, chartColors, showCombined, showSpot, showEma5, showEma15, showVwap])
 
   // Toggle series visibility
   useEffect(() => {
@@ -432,6 +522,18 @@ export default function CombinePremium() {
   useEffect(() => {
     spotSeriesRef.current?.applyOptions({ visible: showSpot })
   }, [showSpot])
+
+  useEffect(() => {
+    ema5SeriesRef.current?.applyOptions({ visible: showEma5 })
+  }, [showEma5])
+
+  useEffect(() => {
+    ema15SeriesRef.current?.applyOptions({ visible: showEma15 })
+  }, [showEma15])
+
+  useEffect(() => {
+    vwapSeriesRef.current?.applyOptions({ visible: showVwap })
+  }, [showVwap])
 
   // Format leg label for display
   const formatLegLabel = (leg: LegConfig) => {
@@ -692,6 +794,42 @@ export default function CombinePremium() {
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: showSpot ? chartColors.spot : '#888' }} />
                   Spot
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setShowEma5(!showEma5)}
+                  className={`flex items-center gap-1 px-2 py-1 rounded transition-colors ${
+                    showEma5
+                      ? 'bg-amber-500/20 text-amber-500'
+                      : 'bg-muted text-muted-foreground'
+                  }`}
+                >
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: showEma5 ? chartColors.ema5 : '#888' }} />
+                  EMA 5
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowEma15(!showEma15)}
+                  className={`flex items-center gap-1 px-2 py-1 rounded transition-colors ${
+                    showEma15
+                      ? 'bg-cyan-500/20 text-cyan-500'
+                      : 'bg-muted text-muted-foreground'
+                  }`}
+                >
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: showEma15 ? chartColors.ema15 : '#888' }} />
+                  EMA 15
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowVwap(!showVwap)}
+                  className={`flex items-center gap-1 px-2 py-1 rounded transition-colors ${
+                    showVwap
+                      ? 'bg-purple-500/20 text-purple-500'
+                      : 'bg-muted text-muted-foreground'
+                  }`}
+                >
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: showVwap ? chartColors.vwap : '#888' }} />
+                  VWAP
+                </button>
               </div>
             )}
           </CardTitle>
@@ -743,6 +881,24 @@ export default function CombinePremium() {
                   <span style={{ color: chartColors.spot }}>Spot:</span>
                   <span className="font-medium">{tooltipData.point.spot.toFixed(2)}</span>
                 </div>
+                {tooltipData.ema5 !== undefined && (
+                  <div className="flex justify-between gap-4">
+                    <span style={{ color: chartColors.ema5 }}>EMA 5:</span>
+                    <span className="font-medium">{tooltipData.ema5.toFixed(2)}</span>
+                  </div>
+                )}
+                {tooltipData.ema15 !== undefined && (
+                  <div className="flex justify-between gap-4">
+                    <span style={{ color: chartColors.ema15 }}>EMA 15:</span>
+                    <span className="font-medium">{tooltipData.ema15.toFixed(2)}</span>
+                  </div>
+                )}
+                {tooltipData.vwap !== undefined && (
+                  <div className="flex justify-between gap-4">
+                    <span style={{ color: chartColors.vwap }}>VWAP:</span>
+                    <span className="font-medium">{tooltipData.vwap.toFixed(2)}</span>
+                  </div>
+                )}
                 {chartData?.legs && tooltipData.point.leg_prices.map((price, i) => (
                   <div key={chartData.legs[i]?.symbol || i} className="flex justify-between gap-4">
                     <span style={{ color: LEG_COLORS[i % LEG_COLORS.length] }}>

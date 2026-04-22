@@ -10,6 +10,7 @@ import {
 } from 'lightweight-charts'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { useThemeStore } from '@/stores/themeStore'
+import { calculateEMA, calculateVWAP } from '@/utils/indicators'
 import { oiProfileApi } from '@/api/oi-profile'
 import {
   straddleChartApi,
@@ -84,6 +85,9 @@ export default function StraddleChart() {
   const [showStraddle, setShowStraddle] = useState(true)
   const [showSpot, setShowSpot] = useState(false)
   const [showSynthetic, setShowSynthetic] = useState(false)
+  const [showEma5, setShowEma5] = useState(true)
+  const [showEma15, setShowEma15] = useState(true)
+  const [showVwap, setShowVwap] = useState(true)
 
   // Chart refs
   const chartContainerRef = useRef<HTMLDivElement>(null)
@@ -91,6 +95,9 @@ export default function StraddleChart() {
   const spotSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const straddleSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const syntheticSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
+  const ema5SeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
+  const ema15SeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
+  const vwapSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const tooltipRef = useRef<HTMLDivElement | null>(null)
   const watermarkRef = useRef<HTMLDivElement | null>(null)
   const chartDataRef = useRef<StraddleChartData | null>(null)
@@ -117,6 +124,9 @@ export default function StraddleChart() {
         spot: '#e2e8f0',
         straddle: '#a78bfa',
         synthetic: '#60a5fa',
+        ema5: '#f59e0b',
+        ema15: '#06b6d4',
+        vwap: '#a855f7',
         watermark: 'rgba(139, 92, 246, 0.12)',
         tooltipBg: 'rgba(30, 15, 60, 0.92)',
         tooltipBorder: 'rgba(139, 92, 246, 0.3)',
@@ -134,6 +144,9 @@ export default function StraddleChart() {
         spot: '#e2e8f0',
         straddle: '#4ade80',
         synthetic: '#60a5fa',
+        ema5: '#f59e0b',
+        ema15: '#06b6d4',
+        vwap: '#a855f7',
         watermark: 'rgba(166, 173, 187, 0.12)',
         tooltipBg: 'rgba(17, 24, 39, 0.92)',
         tooltipBorder: 'rgba(166, 173, 187, 0.2)',
@@ -150,6 +163,9 @@ export default function StraddleChart() {
       spot: '#1e293b',
       straddle: '#16a34a',
       synthetic: '#2563eb',
+      ema5: '#d97706',
+      ema15: '#0891b2',
+      vwap: '#9333ea',
       watermark: 'rgba(0, 0, 0, 0.06)',
       tooltipBg: 'rgba(255, 255, 255, 0.95)',
       tooltipBorder: 'rgba(0, 0, 0, 0.15)',
@@ -291,10 +307,49 @@ export default function StraddleChart() {
       visible: showSynthetic,
     })
 
+    // EMA 5 series (right Y-axis, same as straddle)
+    const ema5Series = chart.addSeries(LineSeries, {
+      color: colors.ema5,
+      lineWidth: 1,
+      lineStyle: 0,
+      priceScaleId: 'right',
+      title: 'EMA 5',
+      lastValueVisible: false,
+      priceLineVisible: false,
+      visible: showEma5,
+    })
+
+    // EMA 15 series (right Y-axis, same as straddle)
+    const ema15Series = chart.addSeries(LineSeries, {
+      color: colors.ema15,
+      lineWidth: 1,
+      lineStyle: 0,
+      priceScaleId: 'right',
+      title: 'EMA 15',
+      lastValueVisible: false,
+      priceLineVisible: false,
+      visible: showEma15,
+    })
+
+    // VWAP series (right Y-axis, same as straddle, dotted)
+    const vwapSeries = chart.addSeries(LineSeries, {
+      color: colors.vwap,
+      lineWidth: 1,
+      lineStyle: 1, // Dotted
+      priceScaleId: 'right',
+      title: 'VWAP',
+      lastValueVisible: false,
+      priceLineVisible: false,
+      visible: showVwap,
+    })
+
     chartRef.current = chart
     spotSeriesRef.current = spotSeries
     straddleSeriesRef.current = straddleSeries
     syntheticSeriesRef.current = syntheticSeries
+    ema5SeriesRef.current = ema5Series
+    ema15SeriesRef.current = ema15Series
+    vwapSeriesRef.current = vwapSeries
 
     // Crosshair move → custom tooltip
     chart.subscribeCrosshairMove((param) => {
@@ -323,10 +378,27 @@ export default function StraddleChart() {
       const c = colorsRef.current
       const { date, time: timeStr } = formatIST(time)
 
+      // Look up EMA/VWAP values from the series at this time
+      const ema5Val = ema5SeriesRef.current ? param.seriesData.get(ema5SeriesRef.current) : undefined
+      const ema15Val = ema15SeriesRef.current ? param.seriesData.get(ema15SeriesRef.current) : undefined
+      const vwapVal = vwapSeriesRef.current ? param.seriesData.get(vwapSeriesRef.current) : undefined
+
       tt.style.display = 'block'
       tt.style.background = c.tooltipBg
       tt.style.border = `1px solid ${c.tooltipBorder}`
       tt.style.color = c.tooltipText
+
+      // Build indicator tooltip lines
+      let indicatorLines = ''
+      if (ema5Val && 'value' in ema5Val && ema5Val.value !== undefined) {
+        indicatorLines += `<div style="display:flex;justify-content:space-between;gap:16px"><span style="color:${c.ema5}">EMA 5</span><span style="color:${c.ema5}">${(ema5Val.value as number).toFixed(2)}</span></div>`
+      }
+      if (ema15Val && 'value' in ema15Val && ema15Val.value !== undefined) {
+        indicatorLines += `<div style="display:flex;justify-content:space-between;gap:16px"><span style="color:${c.ema15}">EMA 15</span><span style="color:${c.ema15}">${(ema15Val.value as number).toFixed(2)}</span></div>`
+      }
+      if (vwapVal && 'value' in vwapVal && vwapVal.value !== undefined) {
+        indicatorLines += `<div style="display:flex;justify-content:space-between;gap:16px"><span style="color:${c.vwap}">VWAP</span><span style="color:${c.vwap}">${(vwapVal.value as number).toFixed(2)}</span></div>`
+      }
 
       tt.innerHTML = `
         <div style="display:flex;justify-content:space-between;gap:16px">
@@ -341,6 +413,7 @@ export default function StraddleChart() {
           <span style="color:${c.tooltipMuted}">&bull; ${point.atm_strike} Put:</span>
           <span>${point.pe_price.toFixed(2)}</span>
         </div>
+        ${indicatorLines}
         <div style="display:flex;justify-content:space-between;gap:16px">
           <span style="color:${c.synthetic}">Synthetic Fut</span>
           <span style="color:${c.synthetic}">${point.synthetic_future.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
@@ -396,7 +469,7 @@ export default function StraddleChart() {
     return () => {
       window.removeEventListener('resize', handleResize)
     }
-  }, [colors, selectedDays, showStraddle, showSpot, showSynthetic])
+  }, [colors, selectedDays, showStraddle, showSpot, showSynthetic, showEma5, showEma15, showVwap])
 
   const applyDataToChart = useCallback((data: StraddleChartData) => {
     if (!data.series || data.series.length === 0) return
@@ -437,6 +510,39 @@ export default function StraddleChart() {
       )
     }
 
+    // Calculate and apply EMA/VWAP on straddle values
+    const straddleTimeSeries = sorted.map((p) => ({ time: p.time, value: p.straddle }))
+
+    if (ema5SeriesRef.current) {
+      const ema5Data = calculateEMA(straddleTimeSeries, 5)
+      ema5SeriesRef.current.setData(
+        ema5Data.map((p) => ({
+          time: p.time as import('lightweight-charts').UTCTimestamp,
+          value: p.value,
+        }))
+      )
+    }
+
+    if (ema15SeriesRef.current) {
+      const ema15Data = calculateEMA(straddleTimeSeries, 15)
+      ema15SeriesRef.current.setData(
+        ema15Data.map((p) => ({
+          time: p.time as import('lightweight-charts').UTCTimestamp,
+          value: p.value,
+        }))
+      )
+    }
+
+    if (vwapSeriesRef.current) {
+      const vwapData = calculateVWAP(straddleTimeSeries)
+      vwapSeriesRef.current.setData(
+        vwapData.map((p) => ({
+          time: p.time as import('lightweight-charts').UTCTimestamp,
+          value: p.value,
+        }))
+      )
+    }
+
     if (chartRef.current) {
       chartRef.current.timeScale().fitContent()
     }
@@ -468,6 +574,18 @@ export default function StraddleChart() {
   useEffect(() => {
     syntheticSeriesRef.current?.applyOptions({ visible: showSynthetic })
   }, [showSynthetic])
+
+  useEffect(() => {
+    ema5SeriesRef.current?.applyOptions({ visible: showEma5 })
+  }, [showEma5])
+
+  useEffect(() => {
+    ema15SeriesRef.current?.applyOptions({ visible: showEma15 })
+  }, [showEma15])
+
+  useEffect(() => {
+    vwapSeriesRef.current?.applyOptions({ visible: showVwap })
+  }, [showVwap])
 
   // ── Data fetching ─────────────────────────────────────────────
 
@@ -789,6 +907,51 @@ export default function StraddleChart() {
                 style={{ borderColor: colors.synthetic, backgroundColor: 'transparent' }}
               />
               Synthetic Fut
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowEma5((v) => !v)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors ${
+                showEma5
+                  ? 'bg-muted font-medium'
+                  : 'opacity-50 hover:opacity-75'
+              }`}
+            >
+              <span
+                className="inline-block h-0.5 w-5 rounded"
+                style={{ backgroundColor: colors.ema5 }}
+              />
+              EMA 5
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowEma15((v) => !v)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors ${
+                showEma15
+                  ? 'bg-muted font-medium'
+                  : 'opacity-50 hover:opacity-75'
+              }`}
+            >
+              <span
+                className="inline-block h-0.5 w-5 rounded"
+                style={{ backgroundColor: colors.ema15 }}
+              />
+              EMA 15
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowVwap((v) => !v)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors ${
+                showVwap
+                  ? 'bg-muted font-medium'
+                  : 'opacity-50 hover:opacity-75'
+              }`}
+            >
+              <span
+                className="inline-block h-0.5 w-5 rounded border-dotted border-t-2"
+                style={{ borderColor: colors.vwap, backgroundColor: 'transparent' }}
+              />
+              VWAP
             </button>
           </div>
         </CardContent>
