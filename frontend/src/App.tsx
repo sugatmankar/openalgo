@@ -42,6 +42,7 @@ const Platforms = lazy(() => import('@/pages/Platforms'))
 const TradingView = lazy(() => import('@/pages/TradingView'))
 const GoCharting = lazy(() => import('@/pages/GoCharting'))
 const PnLTracker = lazy(() => import('@/pages/PnLTracker'))
+const ScalperTerminal = lazy(() => import('@/pages/ScalperTerminal'))
 
 // Sandbox & Analyzer
 const Sandbox = lazy(() => import('@/pages/Sandbox'))
@@ -172,6 +173,7 @@ function App() {
                 <Route path="/tradingview" element={<TradingView />} />
                 <Route path="/gocharting" element={<GoCharting />} />
                 <Route path="/pnl-tracker" element={<PnLTracker />} />
+                <Route path="/scalper" element={<ScalperTerminal />} />
                 {/* Phase 4: Sandbox & Analyzer */}
                 <Route path="/sandbox" element={<Sandbox />} />
                 <Route path="/sandbox/mypnl" element={<SandboxPnL />} />
