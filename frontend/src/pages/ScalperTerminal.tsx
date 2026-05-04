@@ -142,7 +142,7 @@ function ScalperTerminal() {
   // In analyzer mode, force bracket mode to 'ui' (broker SL orders don't work in sandbox)
   const effectiveBracketMode = isAnalyzer ? 'ui' : bracketMode
   const setBracketMode = (v: 'broker' | 'ui') => setBracketModeRaw(v)
-  const [slPoints, setSlPoints] = useState(15)
+  const [slPoints, setSlPoints] = useState(20)
   const [targetPoints, setTargetPoints] = useState(20)
   const [trailEnabled, setTrailEnabled] = useState(true)
   const [trailStep, setTrailStep] = useState(5)
