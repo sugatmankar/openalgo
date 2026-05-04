@@ -167,6 +167,7 @@ from blueprints.search import search_bp
 from blueprints.security import security_bp  # Import the security blueprint
 from blueprints.settings import settings_bp  # Import the settings blueprint
 from blueprints.strategy import strategy_bp  # Import the strategy blueprint
+from blueprints.scalper_bo import scalper_bo_bp  # Import scalper bracket order blueprint
 from blueprints.system_permissions import (
     system_permissions_bp,  # Import the system permissions blueprint
 )
@@ -192,6 +193,7 @@ from database.strategy_db import init_db as ensure_strategy_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.telegram_db import get_bot_config
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
+from database.scalper_db import init_scalper_db as ensure_scalper_tables_exists
 from database.user_db import init_db as ensure_user_tables_exists
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the Limiter instance
@@ -368,6 +370,7 @@ def create_app():
     app.register_blueprint(flow_bp)  # Register Flow blueprint
     app.register_blueprint(broker_credentials_bp)  # Register Broker credentials blueprint
     app.register_blueprint(broker_accounts_bp)  # Register Broker accounts blueprint
+    app.register_blueprint(scalper_bo_bp)  # Register Scalper bracket order blueprint
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
 
     # Exempt webhook endpoints from CSRF protection after app initialization
@@ -662,6 +665,7 @@ def setup_environment(app):
                 ("Historify DB", ensure_historify_tables_exists),
                 ("Flow DB", ensure_flow_tables_exists),
                 ("Leverage DB", ensure_leverage_tables_exists),
+                ("Scalper Bracket DB", ensure_scalper_tables_exists),
             ]
 
             db_init_start = time.time()

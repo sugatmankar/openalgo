@@ -4,20 +4,26 @@ import {
   ChevronLeft,
   ChevronRight,
   RefreshCw,
+  Shield,
+  Target,
   TrendingDown,
   TrendingUp,
   X,
   Zap,
 } from 'lucide-react'
 import { useAuthStore } from '@/stores/authStore'
+import { useThemeStore } from '@/stores/themeStore'
 import { useMarketData } from '@/hooks/useMarketData'
 import { tradingApi } from '@/api/trading'
 import { optionChainApi } from '@/api/option-chain'
+import { scalperBracketApi } from '@/api/scalper-bracket'
+import type { BracketOrder } from '@/api/scalper-bracket'
 import type { PlaceOrderRequest } from '@/types/trading'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -25,6 +31,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import {
   Tooltip,
   TooltipContent,
@@ -95,12 +102,14 @@ interface ScalperPosition {
 
 function ScalperTerminal() {
   const { apiKey } = useAuthStore()
+  const { appMode } = useThemeStore()
+  const isAnalyzer = appMode === 'analyzer'
 
   // Core state
   const [underlying, setUnderlying] = useState('NIFTY')
   const [expiry, setExpiry] = useState('')
   const [expiries, setExpiries] = useState<string[]>([])
-  const [product, setProduct] = useState<'MIS' | 'NRML'>('MIS')
+  const [product, setProduct] = useState<'MIS' | 'NRML'>('NRML')
   const [lots, setLots] = useState(1)
   const [customLots, setCustomLots] = useState('')
 
@@ -126,6 +135,22 @@ function ScalperTerminal() {
   // Track whether first data load is complete (expiries + LTP)
   const [isInitializing, setIsInitializing] = useState(true)
   const initDoneRef = useRef(false)
+
+  // Bracket order settings
+  const [bracketEnabled, setBracketEnabled] = useState(true)
+  const [bracketMode, setBracketModeRaw] = useState<'broker' | 'ui'>('broker')
+  // In analyzer mode, force bracket mode to 'ui' (broker SL orders don't work in sandbox)
+  const effectiveBracketMode = isAnalyzer ? 'ui' : bracketMode
+  const setBracketMode = (v: 'broker' | 'ui') => setBracketModeRaw(v)
+  const [slPoints, setSlPoints] = useState(15)
+  const [targetPoints, setTargetPoints] = useState(20)
+  const [trailEnabled, setTrailEnabled] = useState(true)
+  const [trailStep, setTrailStep] = useState(5)
+
+  // Active bracket orders (keyed by symbol)
+  const [activeBrackets, setActiveBrackets] = useState<Map<string, BracketOrder>>(new Map())
+  const bracketCheckRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const bracketActionInProgress = useRef<Set<string>>(new Set()) // prevent concurrent actions per symbol
 
   // Refs
   const positionTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -153,13 +178,19 @@ function ScalperTerminal() {
   )
   const quantity = lots * underlyingConfig.lotSize
 
-  // WebSocket subscriptions for CE and PE prices
+  // WebSocket subscriptions for CE, PE, and position symbols (for bracket monitoring)
   const wsSymbols = useMemo(() => {
     const syms: Array<{ symbol: string; exchange: string }> = []
     if (ceSymbol) syms.push({ symbol: ceSymbol, exchange: underlyingConfig.exchange })
     if (peSymbol) syms.push({ symbol: peSymbol, exchange: underlyingConfig.exchange })
+    // Add position symbols for live LTP in bracket monitoring
+    for (const pos of positions) {
+      if (!syms.find(s => s.symbol === pos.symbol && s.exchange === pos.exchange)) {
+        syms.push({ symbol: pos.symbol, exchange: pos.exchange })
+      }
+    }
     return syms
-  }, [ceSymbol, peSymbol, underlyingConfig.exchange])
+  }, [ceSymbol, peSymbol, underlyingConfig.exchange, positions])
 
   const { data: marketData, isConnected } = useMarketData({
     symbols: wsSymbols,
@@ -167,17 +198,67 @@ function ScalperTerminal() {
     enabled: wsSymbols.length > 0,
   })
 
+  // REST API fallback prices (polled when WebSocket data is absent)
+  const [restPrices, setRestPrices] = useState<Map<string, number>>(new Map())
+  const restPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // REST API polling for CE/PE prices — like AlgoMirror's /scalper/api/option-prices
+  const fetchRestPrices = useCallback(async () => {
+    if (!apiKey) return
+    const symbolsToFetch: Array<{ symbol: string; exchange: string }> = []
+    if (ceSymbol) symbolsToFetch.push({ symbol: ceSymbol, exchange: underlyingConfig.exchange })
+    if (peSymbol) symbolsToFetch.push({ symbol: peSymbol, exchange: underlyingConfig.exchange })
+    // Also fetch position symbols for bracket monitoring
+    for (const pos of positions) {
+      if (!symbolsToFetch.find(s => s.symbol === pos.symbol && s.exchange === pos.exchange)) {
+        symbolsToFetch.push({ symbol: pos.symbol, exchange: pos.exchange })
+      }
+    }
+    if (symbolsToFetch.length === 0) return
+    try {
+      const resp = await tradingApi.getMultiQuotes(apiKey, symbolsToFetch)
+      if (resp.status === 'success' && resp.results) {
+        setRestPrices(prev => {
+          const updated = new Map(prev)
+          for (const r of resp.results!) {
+            if (r.data?.ltp) {
+              updated.set(`${r.exchange}:${r.symbol}`, r.data.ltp)
+            }
+          }
+          return updated
+        })
+      }
+    } catch { /* silent */ }
+  }, [apiKey, ceSymbol, peSymbol, underlyingConfig.exchange, positions])
+
+  // Start REST polling when symbols are ready, refresh every 3s
+  useEffect(() => {
+    if (!ceSymbol && !peSymbol) return
+    // Fetch immediately
+    fetchRestPrices()
+    restPollRef.current = setInterval(fetchRestPrices, 3000)
+    return () => {
+      if (restPollRef.current) clearInterval(restPollRef.current)
+    }
+  }, [fetchRestPrices, ceSymbol, peSymbol])
+
   const cePrice = useMemo(() => {
     if (!ceSymbol) return 0
     const key = `${underlyingConfig.exchange}:${ceSymbol}`
-    return marketData.get(key)?.data?.ltp ?? 0
-  }, [marketData, ceSymbol, underlyingConfig.exchange])
+    // Priority: WebSocket LTP → REST API fallback
+    const wsLtp = marketData.get(key)?.data?.ltp
+    if (wsLtp && wsLtp > 0) return wsLtp
+    return restPrices.get(key) ?? 0
+  }, [marketData, ceSymbol, underlyingConfig.exchange, restPrices])
 
   const pePrice = useMemo(() => {
     if (!peSymbol) return 0
     const key = `${underlyingConfig.exchange}:${peSymbol}`
-    return marketData.get(key)?.data?.ltp ?? 0
-  }, [marketData, peSymbol, underlyingConfig.exchange])
+    // Priority: WebSocket LTP → REST API fallback
+    const wsLtp = marketData.get(key)?.data?.ltp
+    if (wsLtp && wsLtp > 0) return wsLtp
+    return restPrices.get(key) ?? 0
+  }, [marketData, peSymbol, underlyingConfig.exchange, restPrices])
 
   // Previous prices for flash animation
   const prevCePrice = useRef(0)
@@ -268,6 +349,23 @@ function ScalperTerminal() {
     setIsLoadingPositions(false)
   }, [apiKey])
 
+  // ==================== Bracket Order Helpers ====================
+
+  const refreshBrackets = useCallback(async () => {
+    try {
+      const resp = await scalperBracketApi.getStatus()
+      if (resp.status === 'success') {
+        const map = new Map<string, BracketOrder>()
+        for (const b of resp.brackets) {
+          map.set(b.symbol, b)
+        }
+        setActiveBrackets(map)
+      }
+    } catch (e) {
+      console.error('Failed to fetch brackets:', e)
+    }
+  }, [])
+
   const placeOrder = useCallback(
     async (optionType: 'CE' | 'PE', action: 'BUY' | 'SELL') => {
       if (!apiKey || orderInProgress) return
@@ -300,6 +398,36 @@ function ScalperTerminal() {
         const response = await tradingApi.placeOrder(orderReq)
         if (response.status === 'success') {
           showToast.success(`${action} ${optionType} order placed`, 'orders')
+
+          // Place bracket SL if bracket is enabled
+          if (bracketEnabled) {
+            const entryPrice = optionType === 'CE' ? cePrice : pePrice
+            if (entryPrice > 0) {
+              try {
+                const bracketResp = await scalperBracketApi.placeSL({
+                  symbol,
+                  exchange: underlyingConfig.exchange,
+                  product,
+                  entry_action: action,
+                  quantity,
+                  entry_price: entryPrice,
+                  sl_points: slPoints,
+                  target_points: targetPoints,
+                  trail_enabled: trailEnabled,
+                  trail_step: trailStep,
+                  bracket_mode: effectiveBracketMode,
+                })
+                if (bracketResp.status === 'success') {
+                  showToast.success(bracketResp.message || 'Bracket SL placed', 'orders')
+                  refreshBrackets()
+                } else {
+                  showToast.error(bracketResp.message || 'Bracket SL failed', 'orders')
+                }
+              } catch (bracketErr) {
+                showToast.error(`Bracket SL error: ${bracketErr instanceof Error ? bracketErr.message : 'Unknown'}`, 'orders')
+              }
+            }
+          }
         } else {
           showToast.error(response.message || 'Order failed', 'orders')
         }
@@ -312,26 +440,38 @@ function ScalperTerminal() {
 
       setOrderInProgress(null)
     },
-    [apiKey, expiry, ceSymbol, peSymbol, underlyingConfig.exchange, quantity, product, orderInProgress, refreshPositions]
+    [apiKey, expiry, ceSymbol, peSymbol, underlyingConfig.exchange, quantity, product, orderInProgress, refreshPositions, bracketEnabled, effectiveBracketMode, slPoints, targetPoints, trailEnabled, trailStep, cePrice, pePrice, refreshBrackets]
   )
 
   const exitPosition = useCallback(
     async (pos: ScalperPosition) => {
       setExitingPosition(pos.symbol)
       try {
+        // Cancel any active bracket SL before exiting
+        const bracket = activeBrackets.get(pos.symbol)
+        if (bracket) {
+          try {
+            await scalperBracketApi.cancelSL({
+              symbol: pos.symbol,
+              exchange: pos.exchange,
+              product: pos.product,
+            })
+          } catch { /* ignore cancel errors */ }
+        }
+
         const response = await tradingApi.closePosition(pos.symbol, pos.exchange, pos.product)
         if (response.status === 'success') {
           showToast.success(`Exited ${pos.symbol}`, 'orders')
         } else {
           showToast.error(response.message || 'Exit failed', 'orders')
         }
-        setTimeout(() => refreshPositions(), 1000)
+        setTimeout(() => { refreshPositions(); refreshBrackets() }, 1000)
       } catch (e) {
         showToast.error(`Exit failed: ${e instanceof Error ? e.message : 'Unknown error'}`, 'orders')
       }
       setExitingPosition(null)
     },
-    [refreshPositions]
+    [refreshPositions, refreshBrackets, activeBrackets]
   )
 
   const exitAllPositions = useCallback(async () => {
@@ -341,18 +481,109 @@ function ScalperTerminal() {
     }
     setIsExitingAll(true)
     try {
+      // Cancel all active brackets first
+      for (const [, bracket] of activeBrackets) {
+        try {
+          await scalperBracketApi.cancelSL({
+            symbol: bracket.symbol,
+            exchange: bracket.exchange,
+            product: bracket.product,
+          })
+        } catch { /* ignore */ }
+      }
+
       const response = await tradingApi.closeAllPositions()
       if (response.status === 'success') {
         showToast.success('All positions closed', 'orders')
       } else {
         showToast.error(response.message || 'Exit all failed', 'orders')
       }
-      setTimeout(() => refreshPositions(), 1000)
+      setTimeout(() => { refreshPositions(); refreshBrackets() }, 1000)
     } catch (e) {
       showToast.error(`Exit all failed: ${e instanceof Error ? e.message : 'Unknown error'}`, 'orders')
     }
     setIsExitingAll(false)
-  }, [positions.length, refreshPositions])
+  }, [positions.length, refreshPositions, refreshBrackets, activeBrackets])
+
+  // ==================== Partial Exit & TSL Update ====================
+
+  const partialExit = useCallback(
+    async (pos: ScalperPosition, fraction: number) => {
+      const absQty = Math.abs(pos.quantity)
+      const lotSize = lotSizeMap[underlying] || FALLBACK_LOT_SIZES[underlying] || 1
+      let exitQty = Math.floor(absQty * fraction)
+      // Snap to lot size
+      if (lotSize > 1) {
+        exitQty = Math.floor(exitQty / lotSize) * lotSize
+      }
+      if (exitQty <= 0) {
+        showToast.warning(`Cannot partial exit: qty too small (${absQty} × ${Math.round(fraction * 100)}%)`)
+        return
+      }
+      if (exitQty >= absQty) exitQty = absQty
+
+      try {
+        showToast.info(`Partial exit ${Math.round(fraction * 100)}%: ${exitQty} of ${absQty}...`, 'orders')
+        const resp = await scalperBracketApi.partialExit({
+          symbol: pos.symbol,
+          exchange: pos.exchange,
+          product: pos.product,
+          quantity: pos.quantity,
+          exit_qty: exitQty,
+        })
+        if (resp.status === 'success') {
+          showToast.success(`Partial exit: ${exitQty} qty of ${pos.symbol}`, 'orders')
+          setTimeout(() => { refreshPositions(); refreshBrackets() }, 1000)
+        } else {
+          showToast.error(resp.message || 'Partial exit failed', 'orders')
+        }
+      } catch (e) {
+        showToast.error(`Partial exit error: ${e instanceof Error ? e.message : 'Unknown'}`, 'orders')
+      }
+    },
+    [lotSizeMap, underlying, refreshPositions, refreshBrackets]
+  )
+
+  const updateSLPrice = useCallback(
+    async (pos: ScalperPosition, newSL: number) => {
+      if (!newSL || newSL <= 0) {
+        showToast.error('Invalid SL price')
+        return
+      }
+      const bracket = activeBrackets.get(pos.symbol)
+      if (!bracket) {
+        showToast.warning('No active bracket for this position')
+        return
+      }
+      const isLong = bracket.action === 'BUY'
+      if (isLong && newSL >= pos.ltp) {
+        showToast.error(`SL ${newSL.toFixed(2)} must be below LTP ${pos.ltp.toFixed(2)} for long position`)
+        return
+      }
+      if (!isLong && newSL <= pos.ltp) {
+        showToast.error(`SL ${newSL.toFixed(2)} must be above LTP ${pos.ltp.toFixed(2)} for short position`)
+        return
+      }
+      try {
+        const resp = await scalperBracketApi.updateSL({
+          symbol: pos.symbol,
+          exchange: pos.exchange,
+          product: pos.product,
+          new_sl_price: newSL,
+          current_ltp: pos.ltp,
+        })
+        if (resp.status === 'success') {
+          showToast.success(`SL updated → ₹${(resp.new_sl_price || newSL).toFixed(2)}`, 'orders')
+          refreshBrackets()
+        } else {
+          showToast.error(resp.message || 'SL update failed', 'orders')
+        }
+      } catch (e) {
+        showToast.error(`SL update error: ${e instanceof Error ? e.message : 'Unknown'}`, 'orders')
+      }
+    },
+    [activeBrackets, refreshBrackets]
+  )
 
   // ==================== Effects ====================
 
@@ -469,11 +700,142 @@ function ScalperTerminal() {
     }
   }, [spotLtp, refreshPositions])
 
+  // Load brackets on mount + refresh them with positions
+  useEffect(() => {
+    if (spotLtp > 0) {
+      refreshBrackets()
+    }
+  }, [spotLtp, refreshBrackets])
+
+  // ==================== Bracket Monitoring Loop ====================
+  // Runs every 1 second: check LTP vs SL/Target/Trail for each active bracket
+  useEffect(() => {
+    if (activeBrackets.size === 0) {
+      if (bracketCheckRef.current) {
+        clearInterval(bracketCheckRef.current)
+        bracketCheckRef.current = null
+      }
+      return
+    }
+
+    const checkBrackets = async () => {
+      for (const [symbol, bracket] of activeBrackets) {
+        // Skip if action already in progress for this symbol
+        if (bracketActionInProgress.current.has(symbol)) continue
+
+        // Get live LTP: WebSocket → REST API fallback → position LTP
+        const wsKey = `${bracket.exchange}:${symbol}`
+        const wsLtp = marketData.get(wsKey)?.data?.ltp
+        const restLtp = restPrices.get(wsKey)
+        const pos = positions.find(p => p.symbol === symbol)
+        const ltp = (wsLtp && wsLtp > 0) ? wsLtp : (restLtp && restLtp > 0) ? restLtp : pos?.ltp
+        if (!ltp || ltp <= 0) continue
+
+        const isLong = bracket.action === 'BUY'
+
+        // 1) Check target hit (both modes) — skip when trailing is enabled
+        //    (trailing SL replaces fixed target: target will trail alongside SL)
+        if (bracket.target_price > 0 && !bracket.trail_enabled) {
+          const targetHit = isLong ? ltp >= bracket.target_price : ltp <= bracket.target_price
+          if (targetHit) {
+            bracketActionInProgress.current.add(symbol)
+            try {
+              showToast.success(`TARGET HIT: ${symbol} @ ₹${ltp.toFixed(2)}`, 'orders')
+              await scalperBracketApi.targetExit({
+                symbol: bracket.symbol,
+                exchange: bracket.exchange,
+                product: bracket.product,
+                quantity: bracket.quantity,
+              })
+              setTimeout(() => { refreshPositions(); refreshBrackets() }, 1000)
+            } catch (e) {
+              console.error(`Target exit failed for ${symbol}:`, e)
+            } finally {
+              bracketActionInProgress.current.delete(symbol)
+            }
+            continue
+          }
+        }
+
+        // 2) Check SL hit (UI mode only — broker mode has actual SL order on exchange)
+        if (bracket.bracket_mode === 'ui' && bracket.sl_price > 0) {
+          const slHit = isLong ? ltp <= bracket.sl_price : ltp >= bracket.sl_price
+          if (slHit) {
+            bracketActionInProgress.current.add(symbol)
+            try {
+              showToast.error(`SL HIT: ${symbol} @ ₹${ltp.toFixed(2)}`, 'orders')
+              await scalperBracketApi.slExit({
+                symbol: bracket.symbol,
+                exchange: bracket.exchange,
+                product: bracket.product,
+                quantity: bracket.quantity,
+              })
+              setTimeout(() => { refreshPositions(); refreshBrackets() }, 1000)
+            } catch (e) {
+              console.error(`SL exit failed for ${symbol}:`, e)
+            } finally {
+              bracketActionInProgress.current.delete(symbol)
+            }
+            continue
+          }
+        }
+
+        // 3) Check trailing SL
+        if (bracket.trail_enabled && bracket.trail_step && bracket.trail_step > 0) {
+          const currentBest = bracket.best_price || bracket.entry_price
+          const movedFavorably = isLong
+            ? ltp > currentBest + bracket.trail_step
+            : ltp < currentBest - bracket.trail_step
+
+          if (movedFavorably) {
+            bracketActionInProgress.current.add(symbol)
+            try {
+              const newBest = ltp
+              // Calculate how much to trail
+              const steps = Math.floor(Math.abs(ltp - currentBest) / bracket.trail_step)
+              const trailAmount = steps * bracket.trail_step
+              const newSl = isLong
+                ? bracket.sl_price + trailAmount
+                : bracket.sl_price - trailAmount
+              // Trail target alongside SL so it stays ahead of price
+              const newTarget = bracket.target_price > 0
+                ? (isLong ? bracket.target_price + trailAmount : bracket.target_price - trailAmount)
+                : 0
+
+              await scalperBracketApi.trailSL({
+                symbol: bracket.symbol,
+                exchange: bracket.exchange,
+                product: bracket.product,
+                new_sl_price: newSl,
+                best_price: newBest,
+                new_target_price: newTarget,
+              })
+              showToast.info(`Trail: SL → ₹${newSl.toFixed(2)} | TGT → ₹${newTarget.toFixed(2)}`, 'orders')
+              refreshBrackets()
+            } catch (e) {
+              console.error(`Trail SL failed for ${symbol}:`, e)
+            } finally {
+              bracketActionInProgress.current.delete(symbol)
+            }
+          }
+        }
+      }
+    }
+
+    bracketCheckRef.current = setInterval(checkBrackets, 1000)
+    return () => {
+      if (bracketCheckRef.current) clearInterval(bracketCheckRef.current)
+      bracketCheckRef.current = null
+    }
+  }, [activeBrackets, marketData, restPrices, positions, refreshPositions, refreshBrackets])
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (positionTimerRef.current) clearInterval(positionTimerRef.current)
       if (priceTimerRef.current) clearInterval(priceTimerRef.current)
+      if (bracketCheckRef.current) clearInterval(bracketCheckRef.current)
+      if (restPollRef.current) clearInterval(restPollRef.current)
     }
   }, [])
 
@@ -618,6 +980,11 @@ function ScalperTerminal() {
             <h1 className="text-2xl font-bold">Scalper Terminal</h1>
           </div>
           <div className="flex items-center gap-2">
+            {isAnalyzer && (
+              <Badge className="text-xs bg-purple-500 hover:bg-purple-600 text-white">
+                Analyzer Mode
+              </Badge>
+            )}
             <Badge variant={isConnected ? 'default' : 'destructive'} className="text-xs">
               {isConnected ? 'Live' : 'Offline'}
             </Badge>
@@ -910,8 +1277,134 @@ function ScalperTerminal() {
             </Card>
           </div>
 
-          {/* Right: Positions Panel */}
+          {/* Right: Bracket Settings + Positions Panel */}
           <div className="space-y-4">
+            {/* Bracket Order Settings */}
+            <Card>
+              <CardHeader className="p-4 pb-2">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                    <Shield className="h-3.5 w-3.5" />
+                    Bracket Orders
+                  </CardTitle>
+                  <Switch
+                    checked={bracketEnabled}
+                    onCheckedChange={setBracketEnabled}
+                  />
+                </div>
+              </CardHeader>
+              {bracketEnabled && (
+                <CardContent className="p-4 pt-0 space-y-3">
+                  {/* Mode selector */}
+                  <div className="flex items-center gap-2">
+                    <Label className="text-xs text-muted-foreground w-14">Mode</Label>
+                    <Select value={effectiveBracketMode} onValueChange={(v) => setBracketMode(v as 'broker' | 'ui')} disabled={isAnalyzer}>
+                      <SelectTrigger className="h-7 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="broker" disabled={isAnalyzer}>Broker SL (exchange order)</SelectItem>
+                        <SelectItem value="ui">UI Monitor (browser only)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {isAnalyzer && (
+                      <p className="text-[10px] text-purple-500 mt-0.5">Broker SL unavailable in Analyzer mode</p>
+                    )}
+                  </div>
+
+                  {/* SL & Target points */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label className="text-xs text-muted-foreground">SL Points</Label>
+                      <Input
+                        type="number"
+                        className="h-7 text-xs tabular-nums"
+                        value={slPoints}
+                        min={1}
+                        step={1}
+                        onChange={(e) => setSlPoints(Number(e.target.value) || 0)}
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Target Points</Label>
+                      <Input
+                        type="number"
+                        className="h-7 text-xs tabular-nums"
+                        value={targetPoints}
+                        min={1}
+                        step={1}
+                        onChange={(e) => setTargetPoints(Number(e.target.value) || 0)}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Trail toggle + step */}
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      checked={trailEnabled}
+                      onCheckedChange={setTrailEnabled}
+                      className="scale-75"
+                    />
+                    <Label className="text-xs text-muted-foreground">Trail SL</Label>
+                    {trailEnabled && (
+                      <div className="flex items-center gap-1 ml-auto">
+                        <Label className="text-xs text-muted-foreground">Step</Label>
+                        <Input
+                          type="number"
+                          className="h-7 w-16 text-xs tabular-nums"
+                          value={trailStep}
+                          min={1}
+                          step={1}
+                          onChange={(e) => setTrailStep(Number(e.target.value) || 0)}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Active brackets summary */}
+                  {activeBrackets.size > 0 && (
+                    <div className="border-t pt-2 mt-1">
+                      <div className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
+                        <Target className="h-3 w-3" />
+                        Active Brackets ({activeBrackets.size})
+                      </div>
+                      <div className="space-y-1 max-h-[120px] overflow-y-auto">
+                        {Array.from(activeBrackets.values()).map((b) => {
+                          return (
+                            <div key={b.id} className="flex items-center justify-between text-xs rounded px-1.5 py-0.5 bg-muted/50">
+                              <span className="font-mono truncate max-w-[100px]" title={b.symbol}>
+                                {b.symbol.slice(-8)}
+                              </span>
+                              <div className="flex items-center gap-2 tabular-nums">
+                                <span className="text-red-500" title="SL">
+                                  SL:{b.sl_price?.toFixed(1)}
+                                </span>
+                                <span className="text-emerald-500" title="Target">
+                                  T:{b.target_price?.toFixed(1)}
+                                </span>
+                                {b.trail_enabled && (
+                                  <Badge variant="outline" className="text-[9px] px-1 py-0 h-3.5">
+                                    Trail
+                                  </Badge>
+                                )}
+                                <Badge
+                                  variant={b.bracket_mode === 'broker' ? 'default' : 'secondary'}
+                                  className="text-[9px] px-1 py-0 h-3.5"
+                                >
+                                  {b.bracket_mode === 'broker' ? 'BRK' : 'UI'}
+                                </Badge>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              )}
+            </Card>
+
+            {/* Positions */}
             <Card className="h-full">
               <CardHeader className="p-4 pb-2">
                 <div className="flex items-center justify-between">
@@ -956,10 +1449,14 @@ function ScalperTerminal() {
                   ) : (
                     positions.map((pos) => {
                       const isCE = pos.symbol.endsWith('CE')
+                      const bracket = activeBrackets.get(pos.symbol)
                       return (
                         <div
                           key={`${pos.symbol}-${pos.exchange}`}
-                          className="rounded-lg p-3 border space-y-1 hover:bg-muted/50 transition-colors"
+                          className={cn(
+                            'rounded-lg p-3 border space-y-1 hover:bg-muted/50 transition-colors',
+                            bracket && 'border-l-2 border-l-blue-500'
+                          )}
                         >
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
@@ -1000,6 +1497,80 @@ function ScalperTerminal() {
                               {pos.pnl >= 0 ? '+' : ''}₹{formatPrice(Math.abs(pos.pnl))}
                             </span>
                           </div>
+                          {/* Bracket SL/Target indicators */}
+                          {bracket && (
+                            <div className="space-y-1 pt-0.5">
+                              <div className="flex items-center gap-2 text-[10px] tabular-nums">
+                                <span className="text-red-400">
+                                  SL: ₹{bracket.sl_price?.toFixed(2)}
+                                </span>
+                                <span className="text-emerald-400">
+                                  T: ₹{bracket.target_price?.toFixed(2)}
+                                </span>
+                                {bracket.trail_enabled && (
+                                  <span className="text-blue-400">
+                                    Trail↑{bracket.trail_step}
+                                  </span>
+                                )}
+                                <Badge
+                                  variant={bracket.bracket_mode === 'broker' ? 'default' : 'secondary'}
+                                  className="text-[8px] px-1 py-0 h-3 ml-auto"
+                                >
+                                  {bracket.bracket_mode === 'broker' ? 'BRK' : 'UI'}
+                                </Badge>
+                              </div>
+                              {/* Partial Exit + TSL Update */}
+                              <div className="flex items-center gap-1 pt-0.5 border-t border-border/30">
+                                <span className="text-[9px] text-muted-foreground shrink-0">Part:</span>
+                                <Button
+                                  variant="outline"
+                                  className="h-5 px-1.5 text-[9px] text-orange-500 border-orange-500/40 hover:bg-orange-500/10"
+                                  onClick={() => partialExit(pos, 0.5)}
+                                  title={`Exit 50% (${Math.floor(Math.abs(pos.quantity) * 0.5)} of ${Math.abs(pos.quantity)})`}
+                                >
+                                  50%
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  className="h-5 px-1.5 text-[9px] text-orange-500 border-orange-500/40 hover:bg-orange-500/10"
+                                  onClick={() => partialExit(pos, 0.75)}
+                                  title={`Exit 75% (${Math.floor(Math.abs(pos.quantity) * 0.75)} of ${Math.abs(pos.quantity)})`}
+                                >
+                                  75%
+                                </Button>
+                                <span className="text-[9px] text-muted-foreground/40 mx-0.5">|</span>
+                                <span className="text-[9px] text-muted-foreground shrink-0">SL:</span>
+                                <Input
+                                  type="number"
+                                  defaultValue={bracket.sl_price?.toFixed(2)}
+                                  step={0.05}
+                                  min={0.05}
+                                  className="h-5 w-16 px-1 text-[9px] text-center tabular-nums"
+                                  id={`sl-update-${pos.symbol}`}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      const val = parseFloat((e.target as HTMLInputElement).value)
+                                      if (val > 0) updateSLPrice(pos, val)
+                                    }
+                                  }}
+                                />
+                                <Button
+                                  variant="outline"
+                                  className="h-5 px-1.5 text-[9px] text-blue-500 border-blue-500/40 hover:bg-blue-500/10"
+                                  onClick={() => {
+                                    const el = document.getElementById(`sl-update-${pos.symbol}`) as HTMLInputElement
+                                    if (el) {
+                                      const val = parseFloat(el.value)
+                                      if (val > 0) updateSLPrice(pos, val)
+                                    }
+                                  }}
+                                  title="Update trailing SL price"
+                                >
+                                  Set
+                                </Button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )
                     })
