@@ -281,7 +281,8 @@ def bracket_place_sl():
 
                 is_long = entry_action == "BUY"
                 sl_action = "SELL" if is_long else "BUY"
-                keep_sl = _round_to_tick(existing.sl_price)
+                # Recalculate SL from new avg entry using current SL points from request
+                keep_sl = _round_to_tick(max(avg_entry - sl_points, 0.05) if is_long else avg_entry + sl_points)
                 new_target = _round_to_tick(avg_entry + target_points if is_long else avg_entry - target_points)
 
                 # Cancel old SL order
@@ -310,6 +311,8 @@ def bracket_place_sl():
                     existing.sl_order_status = "placed"
                     existing.quantity = total_qty
                     existing.entry_price = avg_entry
+                    existing.sl_price = keep_sl  # Recalculated from new avg entry
+                    existing.best_price = avg_entry  # Reset HWM for fresh trailing
                     existing.target_price = new_target
                     existing.sl_points = sl_points
                     existing.target_points = target_points
@@ -343,16 +346,26 @@ def bracket_place_sl():
                 logger.error(f"[BRACKET REPLACE] Exception for {symbol}: {replace_err}")
                 return jsonify({"status": "error", "message": f"SL replace error: {str(replace_err)}"})
 
-        # UI mode accumulation
+        # UI mode accumulation — recalculate SL/target from new avg entry
+        is_long = entry_action == "BUY"
+        new_sl = _round_to_tick(max(avg_entry - sl_points, 0.05) if is_long else avg_entry + sl_points)
+        new_target = _round_to_tick(avg_entry + target_points if is_long else avg_entry - target_points)
         existing.quantity = total_qty
         existing.entry_price = avg_entry
+        existing.sl_price = new_sl
+        existing.target_price = new_target
+        existing.sl_points = sl_points
+        existing.target_points = target_points
+        existing.trail_enabled = trail_enabled
+        existing.trail_step = trail_step if trail_enabled else None
+        existing.best_price = avg_entry  # Reset HWM for fresh trailing
         db_session.commit()
         return jsonify({
             "status": "success",
             "message": f"UI bracket updated (qty={total_qty})",
             "bracket_id": existing.id,
-            "sl_price": existing.sl_price,
-            "target_price": existing.target_price,
+            "sl_price": new_sl,
+            "target_price": new_target,
             "bracket_mode": existing.bracket_mode,
             "total_quantity": total_qty,
             "entry_price": avg_entry,
