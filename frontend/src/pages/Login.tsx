@@ -96,6 +96,20 @@ export default function Login() {
         credentials: 'include',
       })
 
+      // Handle rate limiting (429) explicitly before content-type check
+      if (response.status === 429) {
+        setError('Too many login attempts. Please wait a minute and try again.')
+        setIsLoading(false)
+        return
+      }
+
+      // Handle CSRF errors (400) that may occur after session expiry
+      if (response.status === 400) {
+        setError('Security token expired. Please try again.')
+        setIsLoading(false)
+        return
+      }
+
       // Check content type before parsing
       const contentType = response.headers.get('content-type')
       if (!contentType || !contentType.includes('application/json')) {
@@ -111,6 +125,15 @@ export default function Login() {
       }
 
       const data = await response.json()
+
+      // Check HTTP status first - any non-2xx response is an error
+      if (!response.ok) {
+        setError(data.message || data.error || 'Login failed. Please try again.')
+        if (data.redirect) {
+          navigate(data.redirect)
+        }
+        return
+      }
 
       if (data.status === 'error') {
         setError(data.message || 'Login failed. Please try again.')

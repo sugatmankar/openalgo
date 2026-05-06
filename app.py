@@ -431,6 +431,7 @@ def create_app():
             request.path.startswith("/static/")
             or request.path.startswith("/api/")
             or request.path.startswith("/assets/")  # React frontend assets
+            or request.path.startswith("/socket.io/")  # Flask-SocketIO polling
             or request.path
             in [
                 "/",

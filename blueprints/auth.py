@@ -44,7 +44,7 @@ auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
 
 @auth_bp.errorhandler(429)
 def ratelimit_handler(e):
-    return jsonify(error="Rate limit exceeded"), 429
+    return jsonify(status="error", error="Rate limit exceeded", message="Too many login attempts. Please wait and try again."), 429
 
 
 @auth_bp.route("/csrf-token", methods=["GET"])
