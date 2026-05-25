@@ -431,6 +431,7 @@ def create_app():
             request.path.startswith("/static/")
             or request.path.startswith("/api/")
             or request.path.startswith("/assets/")  # React frontend assets
+            or request.path.startswith("/socket.io/")  # Flask-SocketIO polling
             or request.path
             in [
                 "/",
@@ -831,6 +832,45 @@ def _restore_caches_background():
             logger.debug(f"Cache restoration skipped: {e}")
 
 threading.Thread(target=_restore_caches_background, daemon=True).start()
+
+
+# Restore broker account env vars from DB on startup
+# (so broker modules work after a service restart without manual login)
+def _restore_broker_env_background():
+    app.db_ready.wait()
+    with app.app_context():
+        try:
+            from database.broker_account_db import BrokerAccount, _account_to_dict
+
+            account = BrokerAccount.query.filter_by(
+                is_active=True, is_authenticated=True
+            ).first()
+            if account:
+                acct = _account_to_dict(account, decrypt=True)
+                api_key = acct.get("broker_api_key") or ""
+                broker = acct.get("broker", "")
+                # Flattrade requires 'userid:::apikey' format
+                if broker == "flattrade" and ":::" not in api_key and acct.get("user_id"):
+                    api_key = f"{acct['user_id']}:::{api_key}"
+                os.environ["BROKER_API_KEY"] = api_key
+                os.environ["BROKER_API_SECRET"] = acct.get("broker_api_secret") or ""
+                for env_key, acct_key in (
+                    ("BROKER_API_KEY_MARKET", "broker_api_key_market"),
+                    ("BROKER_API_SECRET_MARKET", "broker_api_secret_market"),
+                    ("REDIRECT_URL", "redirect_url"),
+                ):
+                    value = acct.get(acct_key)
+                    if value:
+                        os.environ[env_key] = value
+                    else:
+                        os.environ.pop(env_key, None)
+                logger.info(f"Broker env restored from DB: account '{acct.get('account_name')}' ({broker})")
+            else:
+                logger.debug("No active/authenticated broker account found for env restoration")
+        except Exception as e:
+            logger.debug(f"Broker env restoration skipped: {e}")
+
+threading.Thread(target=_restore_broker_env_background, daemon=True).start()
 
 
 # Database session cleanup (teardown handler)
